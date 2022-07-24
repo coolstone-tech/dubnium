@@ -74,7 +74,7 @@ class dubnium extends require('events') {
         if (this.exists(tag)) return this.get(tag)
         this.emit("create", tag, stringify(data))
         writeFileSync(this.locateRecord(tag), stringify(data))
-        callback(this.get(tag).data)
+       if(callback) callback(this.get(tag))
         return this.get(tag)
     }
 
@@ -96,7 +96,7 @@ class dubnium extends require('events') {
         return {
             tag,
             data: t.ext == 'json' ? JSON.parse(d) : d,
-            path: `${t.dirPath}/${tag}.${t.ext}`,
+            path: t.locateRecord(tag),
             /** Delete the Record */
             delete() {
                 t.emit("delete", tag, this.data)
@@ -130,7 +130,8 @@ class dubnium extends require('events') {
 
                     jsonObj[key] = value
 
-                    return writeFileSync(t.locateRecord(tag), JSON.stringify(jsonObj, null, 2))
+                    writeFileSync(t.locateRecord(tag), JSON.stringify(jsonObj, null, 2))
+                    return t.get(tag)
                 }
             },
             /** Change Record's tag
@@ -170,6 +171,7 @@ class dubnium extends require('events') {
             },
             /** Don't allow any functions to be called after.
              * @since v2.0.0
+            * @returns nothing
              */
             end() {
                 t.emit("end")
@@ -179,7 +181,7 @@ class dubnium extends require('events') {
              * @since v2.0.0
             */
             watch(listener) {
-                watchFile(t.locateRecord(tag), options, listener)
+                watchFile(t.locateRecord(tag), {}, listener)
                 return t.get(tag)
             },
             /** Remove watch
@@ -365,6 +367,7 @@ class dubnium extends require('events') {
                 }
             })
         }
+        return this
     }
     /** Delete all Records */
     wipe() {
@@ -373,6 +376,7 @@ class dubnium extends require('events') {
             recursive: true
         })
         mkdirSync(this.dirPath)
+        return this
     }
     /** Delete all Records & the directory */
     close() {
@@ -380,6 +384,7 @@ class dubnium extends require('events') {
         rmSync(this.dirPath, {
             recursive: true
         })
+        return this
     }
     /** Make a directory at the specified path*/
     dir() {
@@ -414,11 +419,17 @@ module.exports.Template = class {
         this.template = template
     }
 
+    /** Use `template.use()` instead
+     * @since v2.0.0
+     * @deprecated Since v2.0.1
+     */
+    new(...values) {console.warn("template.new() was replaced with template.use()"); let n = 0; const t = this.template; for (const e in this.template) {if (typeof arguments[n] != typeof t[e]) console.warn(`Changed type of ${Object.keys(t).find(key => t[key] == t[e])} to ${typeof arguments[n]} [Arg #${n}]`); if (arguments[n]) t[e] = arguments[n];n++;}; return t}
+   
     /** Use template
      * @param values The values, in order from template.
-     * @since v2.0.0
+     * @since v2.0.1
      */
-    new(...values) {
+    use(...values) {
         let n = 0
         const t = this.template
         for (const e in this.template) {
