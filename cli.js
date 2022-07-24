@@ -12,12 +12,9 @@ rl.question("Args (separate with ','): ", args => {
 const db = new (require("./index"))(dirpath,ext)
 let a = args.split(",")
 if(db[cmd] && typeof db[cmd] == 'function'){
-const c = db[cmd](a[0],a[1],a[2],args[3])
-console.log(`\nRan ${cmd}!`, ' \n\n', c ? c : 'Nothing returned','\n')
-}else if(db[cmd] && typeof db.get(a[0])[cmd] == 'function'){
-console.log(db.get(a[0])[cmd](a[1],a[2],a[3],a[4]))
-const c = db.get(a[0])[cmd](a[1],a[2],a[3],args[4])
-console.log(`\nRan ${cmd}!`, '\n\n', c ? c : 'Nothing returned','\n')
+console.log(`Ran ${cmd} \n\n`, db[cmd](a[0],a[1],a[2],args[3]))
+}else if(db.get(a[0])[cmd] && typeof db.get(a[0])[cmd] == 'function'){
+console.log(`Ran ${cmd} \n\n`, db.get(a[0])[cmd](a[1],a[2],a[3],a[4]))
 }else{
 console.log("\nCommand not found.\n\nCommand syntax: \x1b[47m\x1b[30m[npx] dubnium <command>\n")
 }
