@@ -48,3 +48,6 @@ Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](htt
 Report feedback & bugs [here](https://forms.gle/s7Wi4pZqNbZG72mU7)
 
 Like our work? [Support us on Patreon](https://www.patreon.com/coolstone)
+
+## Want ESM support in the NPM package?
+[Let us know here](https://groups.google.com/g/dubnium/c/rEJKuF-lwLE)
