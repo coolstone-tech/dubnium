@@ -43,8 +43,8 @@ db.get('tag').overwrite(data)
 Read about it [here](https://db.coolstone.dev/key-features)
 
 ## Other info
-### Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](https://discord.gg/nzTmfZ8), or our [forum](https://groups.google.com/g/dubnium)
+Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](https://discord.gg/nzTmfZ8), or our [forum](https://groups.google.com/g/dubnium)
 
-### Report feedback & bugs [here](https://forms.gle/s7Wi4pZqNbZG72mU7)
+Report feedback & bugs [here](https://forms.gle/s7Wi4pZqNbZG72mU7)
 
-### Like our work? [Support us on Patreon](https://www.patreon.com/coolstone)
+Like our work? [Support us on Patreon](https://www.patreon.com/coolstone)
