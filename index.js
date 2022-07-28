@@ -4,8 +4,6 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
-
-
 const {
     existsSync,
     writeFileSync,
@@ -17,7 +15,9 @@ const {
     mkdirSync,
     unwatchFile,
     watchFile,
-    symlink
+    symlink,
+    appendFileSync,
+    truncateSync
 } = require('fs')
 
 const path = require('path')
@@ -38,8 +38,6 @@ const searchArray = (arr, val) => {
     })
 }
 
-process.title = 'dubnium'
-
 class dubnium extends require('events') {
     dirPath = ''
     ext = ''
@@ -48,7 +46,7 @@ class dubnium extends require('events') {
      * @param {string} dirPath Path to dir
      * @param {string?} ext Custom file extension
      */
-    constructor(dirPath,ext) {
+    constructor(dirPath, ext) {
         super()
         this.dirPath = dirPath
         this.emit('start', dirPath, ext)
@@ -57,7 +55,6 @@ class dubnium extends require('events') {
         } else {
             this.ext = ext.toLowerCase().trim()
         }
-
     }
 
     /** Get the path to a Record */
@@ -69,12 +66,13 @@ class dubnium extends require('events') {
      * @param {string} tag The Record's tag
      * @param data Record's data
      * @param {function} callback
+     * @param {object?} options writeFile options
      */
-    create(tag, data, callback) {
+    create(tag, data, callback, options) {
         if (this.exists(tag)) return this.get(tag)
         this.emit("create", tag, stringify(data))
-        writeFileSync(this.locateRecord(tag), stringify(data))
-       if(callback) callback(this.get(tag))
+        writeFileSync(this.locateRecord(tag), stringify(data), options)
+        if (callback) callback(this.get(tag))
         return this.get(tag)
     }
 
@@ -97,15 +95,18 @@ class dubnium extends require('events') {
             tag,
             data: t.ext == 'json' ? JSON.parse(d) : d,
             path: t.locateRecord(tag),
+            size: statSync(t.locateRecord(tag)).size,
+            /** Exit Record
+             * @since v2.2.0
+             */
+            exit() {
+                return t
+            },
             /** Delete the Record */
             delete() {
                 t.emit("delete", tag, this.data)
                 rmSync(t.locateRecord(tag))
-                return {
-                    end() {
-                        t.emit("end")
-                    }
-                }
+                return t
             },
             /** Overwrite the Record's content
              * @param data Record's data
@@ -115,10 +116,27 @@ class dubnium extends require('events') {
                 writeFileSync(t.locateRecord(tag), stringify(data))
                 return t.get(tag)
             },
+            /** Add data to end of a Record (Not recommend for JSON)
+             * @param data Data to append
+             * @param {object?} options appendFile options
+             * @since 2.2.0
+             */
+            append(data, options) {
+                appendFileSync(this.path, stringify(data), options)
+                return t.get(tag)
+            },
+            /** Truncate Record
+             * @param {number} length New file length. Set to `0` to empty the file.
+             * @since 2.2.0
+             */
+            truncate(length) {
+                truncateSync(this.path, length)
+                return t.get(tag)
+            },
             /** Change Record's value (JSON only)
              * @param {string} key JSON Key
              * @param value Key's value
-            */
+             */
             setValue(key, value) {
                 if (t.ext != 'json') {
                     console.log("Use overwrite for your file type");
@@ -171,7 +189,7 @@ class dubnium extends require('events') {
             },
             /** Don't allow any functions to be called after.
              * @since v2.0.0
-            * @returns nothing
+             * @returns nothing
              */
             end() {
                 t.emit("end")
@@ -179,12 +197,12 @@ class dubnium extends require('events') {
             /** Run a function when a file is accessed 
              * @param {function} listener Callback to run on accessed
              * @since v2.0.0
-            */
+             */
             watch(listener) {
                 watchFile(t.locateRecord(tag), {}, listener)
                 return t.get(tag)
             },
-            /** Remove watch
+            /** Stop watching
              * @param {function} listener
              * @since v2.0.0
              */
@@ -202,16 +220,36 @@ class dubnium extends require('events') {
              * @param {string} dirPath The path to create symlink in
              * @param {function} callback Callback
              * @since v2.0.0
-            */
-            createSymlink(dirPath,callback) {
+             */
+            createSymlink(dirPath, callback) {
                 t.emit("symlink", this.tag, dirPath)
                 symlink(path.join(t.dirPath, `${this.tag}.${t.ext}`), dirPath, callback)
                 return t.get(tag)
             },
+            /** Search Record content
+             * @since v2.1.0
+             * @param {string} query Search query
+             * @param {string} splitBy String to split the Record's data by. For example, "\n" for lines or " " for spaces.
+             */
+            search(query, splitBy) {
+                let results = []
+                if (!query) return null
+                const lines = stringify(this.data).split(splitBy || " ")
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].search(query) !== -1) {
+                        results.push(lines[i])
+                    }
+                }
+                return {
+                    record: t.get(tag),
+                    query,
+                    results
+                }
+            },
             /** Search keys in a Record (JSON only)
              * @since v2.0.0
-            */
-            search(query) {
+             */
+            searchKeys(query) {
                 let results = {}
                 const obj = t.get(tag).data
                 for (let key in obj) {
@@ -223,25 +261,35 @@ class dubnium extends require('events') {
                         }
                     }
                 }
-                return results
+                return {
+                    record: t.get(tag),
+                    query,
+                    results
+                }
             },
             /** Convert the Record's data to string
              * @since v2.0.0
-            */
+             */
             toString() {
                 return stringify(this.data)
             },
-             /** Convert the Record's data to an object, if possible
-              * @since v2.0.0
-              */
+            /** Convert the Record's data to an object, if possible
+             * @since v2.0.0
+             */
             toJSON() {
                 return new Object(this.data)
             }
         }
     }
 
+    /** Don't allow any functions to be called after.
+     * @since v2.0.0
+     */
+    end() {
+        this.emit("end")
+    }
+
     /** Get all Records
-     * @since v1.0.0
      * @param {number} returnType 1: Return as JSON. 2: Return as Array
      */
     getAll(returnType) {
@@ -277,11 +325,10 @@ class dubnium extends require('events') {
 
 
     /** Get all Records from a key & value (JSON only)
-     * @since v1.0.0
      * @param {string} key JSON Key
      * @param value The key's value
      * @param {string} returnType 1: Return as JSON. 2: Return as Array
-    */
+     */
     getFromValue(key, value, returnType) {
         if (this.ext != 'json') return
         let data = returnType == 1 ? {} : []
@@ -295,10 +342,9 @@ class dubnium extends require('events') {
     }
 
     /** Search Tags
-    * @since v1.0.0
      * @param {string} term Search query
      * @param {string} returnType 1: Return as JSON. 2: Return as Array
-    */
+     */
     searchTags(term, returnType) {
         const list = []
         for (const f of readdirSync(this.dirPath)) {
@@ -325,7 +371,10 @@ class dubnium extends require('events') {
                 })
             })
         }
-        return res
+        return {
+            query: term,
+            results: res
+        }
     }
 
     /** Delete Records older than a specified time
@@ -369,8 +418,26 @@ class dubnium extends require('events') {
         }
         return this
     }
+    /** Deletes Records larger than the specified size (in bytes, for now)
+     * @param {number} maxBytes Delete Records larger than this (in bytes)
+     * @since v2.2.0
+     */
+    deleteLarge(maxBytes) {
+        if (maxBytes) {
+            this.emit("delete_large", maxBytes)
+            walkDir(this.dirPath, (filePath) => {
+                const stat = statSync(filePath)
+                if (stat.size > maxBytes) {
+                    this.get(path.basename(filePath).replace(`.${this.ext}`, '')).delete()
+                    return
+                }
+            })
+        }
+        return this
+    }
     /** Delete all Records */
     wipe() {
+        if (!existsSync(this.dirPath)) return this
         this.emit('wipe', this.dirPath)
         rmSync(this.dirPath, {
             recursive: true
@@ -380,6 +447,7 @@ class dubnium extends require('events') {
     }
     /** Delete all Records & the directory */
     close() {
+        if (!existsSync(this.dirPath)) return this
         this.emit('close', this.dirPath)
         rmSync(this.dirPath, {
             recursive: true
@@ -414,17 +482,11 @@ module.exports.Template = class {
     /** Set up a JSON template
      * @param {object} template The template
      * @since 2.0.0
-    */
+     */
     constructor(template) {
         this.template = template
     }
 
-    /** Use `template.use()` instead
-     * @since v2.0.0
-     * @deprecated Since v2.0.1
-     */
-    new(...values) {console.warn("template.new() was replaced with template.use()"); let n = 0; const t = this.template; for (const e in this.template) {if (typeof arguments[n] != typeof t[e]) console.warn(`Changed type of ${Object.keys(t).find(key => t[key] == t[e])} to ${typeof arguments[n]} [Arg #${n}]`); if (arguments[n]) t[e] = arguments[n];n++;}; return t}
-   
     /** Use template
      * @param values The values, in order from template.
      * @since v2.0.1
