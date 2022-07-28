@@ -7,26 +7,32 @@
 
 ## API
 
-Initialize
+### Initialize
+CommonJS
 ```js
-const DataManager = require('dubnium')
-const db = new DataManager('dir','file extension')
-/*db.dir() // if you want Dubnium to create a folder for you*/
+const Dubnium = require('dubnium')
+const db = new Dubnium('dir','file extension')
 ```
 
-Create Record
+ESM
+```js
+import Dubnium from 'dubnium'
+const db = new Dubnium('dir','file extension')
+```
+
+### Create Record
 
 ```js 
 db.create('tag',data)
 ```
 
- Delete Record
+### Delete Record
 
 ```js
 db.get('tag').delete()
 ```
 
-  Modify
+### Modify
 
 ```js
 //Modify Record's value (JSON only):
@@ -39,15 +45,14 @@ db.get('old_tag').setTag('new_tag')
 db.get('tag').overwrite(data)
 ```
 
+### More API methods can be found on our [docs](https://db.coolstone.dev)
+
 ## Why use Dubnium?
 Read about it [here](https://db.coolstone.dev/key-features)
 
 ## Other info
 Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](https://discord.gg/nzTmfZ8), or our [forum](https://groups.google.com/g/dubnium)
 
-Report feedback & bugs [here](https://forms.gle/s7Wi4pZqNbZG72mU7)
+Report feedback & bugs [here](https://groups.google.com/g/dubnium)
 
 Like our work? [Support us on Patreon](https://www.patreon.com/coolstone)
-
-## Want ESM support in the NPM package?
-[Let us know here](https://groups.google.com/g/dubnium/c/rEJKuF-lwLE)
