@@ -18,30 +18,31 @@ const {
     symlink,
     appendFileSync,
     truncateSync
- } = require('fs')
-  
- const path = require('path')
-  
- const stringify = (data) => {
+} = require('fs')
+
+const path = require('path')
+
+const stringify = (data) => {
     return typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
- }
- const walkDir = (dir, callback) => {
+}
+const walkDir = (dir, callback) => {
     readdirSync(dir).forEach(f => {
         let dirPath = path.join(dir, f)
         let isDirectory = statSync(dirPath).isDirectory()
         isDirectory ? this.walkDir(dirPath, callback) : callback(path.join(dir, f))
     })
- }
- const searchArray = (arr, val) => {
+}
+const searchArray = (arr, val) => {
     return arr.filter(el => {
         return el.match(new RegExp(val, 'gi'))
     })
- }
-  
- class dubnium extends require('events') {
+}
+
+
+const dubnium = class extends require("events") {
     dirPath = ''
     ext = ''
-  
+
     /** Initialize a new database
      * @param {string} dirPath Path to dir
      * @param {string?} ext Custom file extension
@@ -56,7 +57,7 @@ const {
             this.ext = ext.toLowerCase().trim()
         }
     }
-  
+
     /** Get the path to a Record
      * @since v2.2.1
      */
@@ -64,13 +65,6 @@ const {
         return `${this.dirPath}/${tag}.${this.ext}`
     }
 
-        /** Use `dubnium.find('tag')`
-         * @deprecated Since v2.2.1
-         */
-        locateRecord(tag = "") {
-            return `${this.dirPath}/${tag}.${this.ext}`
-        }
-  
     /** Make a new Record
      * @param {string} tag The Record's tag
      * @param data Record's data
@@ -84,14 +78,14 @@ const {
         if (callback) callback(this.get(tag))
         return this.get(tag)
     }
-  
+
     /** Check if Record exists
      * @param {string} tag The Record's tag
      */
     exists(tag) {
         return existsSync(this.find(tag))
     }
-  
+
     /** Get Record
      * @param {string} tag The Record's tag
      * @returns Record
@@ -131,7 +125,7 @@ const {
              * @since 2.2.0
              */
             append(data, options) {
-                t.emit("append",tag,stringify(data))
+                t.emit("append", tag, stringify(data))
                 appendFileSync(t.find(tag), stringify(data), options)
                 return t.get(tag)
             },
@@ -140,7 +134,7 @@ const {
              * @since 2.2.0
              */
             truncate(length) {
-                t.emit("truncate",tag,length)
+                t.emit("truncate", tag, length)
                 truncateSync(t.find(tag), length)
                 return t.get(tag)
             },
@@ -150,15 +144,15 @@ const {
              */
             setValue(key, value) {
                 if (t.ext != 'json') {
-                    console.log("Use overwrite for your file type");
+                    console.error("Use overwrite for your file type");
                     return t.get(tag)
                 } else {
                     t.emit("change", tag, key, value)
-  
+
                     let jsonObj = t.get(tag).data
-  
+
                     jsonObj[key] = value
-  
+
                     writeFileSync(t.find(tag), JSON.stringify(jsonObj, null, 2))
                     return t.get(tag)
                 }
@@ -294,24 +288,52 @@ const {
             /** Run any function from `fs`. If you wish to get the return value, access the `returns` property
              * @param {string} Function The function (name) to run
              * @param args The function arguments
-              */
-            other(Function,...args){
+             */
+            other(Function, ...args) {
                 const r = t.get(tag)
-                if(!require("fs")[Function]) return r
-                const f = require("fs")[Function].apply(null, args)
+                if (!require('fs')[Function]) {
+                    throw new TypeError(`fs.${Function} is not a function`)
+                }
+                const arr = []
+                arr.push(t.find(tag))
+                args.forEach(e => {
+                    arr.push(e)
+                })
+                t.emit("other",Function,args)
+                const f = require('fs')[Function].apply(null, arr)
                 r.returns = f
-               return r
+                return r
+            },
+
+            /** Run a custom callback function.
+             * @since v2.2.2
+             */
+            custom(callback = (record, recordPath) => {}) {
+                if (typeof callback != 'function') return t.get(tag)
+                this.emit("custom",callback)
+                callback(this, this.path)
+                return t.get(tag)
             }
         }
     }
-  
+
     /** Don't allow any functions to be called after.
      * @since v2.0.0
      */
     end() {
         this.emit("end")
     }
-  
+
+    /** Run a custom callback function.
+     * @since v2.2.2
+     */
+    custom(callback = (Class, dirPath) => {}) {
+        this.emit("custom",callback)
+        if (typeof callback != 'function') return t.get(tag)
+        callback(this, this.dirPath)
+        return this
+    }
+
     /** Get all Records
      * @param {number} returnType 1: Return as JSON. 2: Return as Array
      */
@@ -324,12 +346,12 @@ const {
                 }
             }
         }
-  
+
         let obj_of_data
-  
+
         if (returnType == 1) {
             obj_of_data = {}
-  
+
             array_of_filenames.forEach(filename => {
                 obj_of_data[filename.replace('.' + this.ext, '')] = this.get(path.basename(filename).replace(path.extname(filename), "")).data
             })
@@ -342,11 +364,11 @@ const {
                 })
             })
         }
-  
+
         return obj_of_data
     }
-  
-  
+
+
     /** Get all Records from a key & value (JSON only)
      * @param {string} key JSON Key
      * @param value The key's value
@@ -359,11 +381,11 @@ const {
             if (d.data[key] == value) {
                 returnType == 1 ? data[d.tag] = this.get(d.tag) : data.push(this.get(d.tag))
             }
-  
+
         })
         return data
     }
-  
+
     /** Search Tags
      * @param {string} term Search query
      * @param {string} returnType 1: Return as JSON. 2: Return as Array
@@ -377,7 +399,7 @@ const {
                 }
             }
         }
-  
+
         const r = searchArray(list, term)
         let res = []
         if (returnType && returnType == 1) {
@@ -399,7 +421,7 @@ const {
             results: res
         }
     }
-  
+
     /** Delete Records older than a specified time
      * @param {object} options Time options
      * @param {number} options.ms Milliseconds
@@ -432,7 +454,6 @@ const {
             this.emit("delete_old", ms)
             walkDir(this.dirPath, (filePath) => {
                 const stat = statSync(filePath)
-                console.log(new Date().getTime(), new Date(stat.mtime).getTime() + ms)
                 if (new Date().getTime() > new Date(stat.mtime).getTime() + ms) {
                     this.get(path.basename(filePath).replace(`.${this.ext}`, '')).delete()
                     return
@@ -441,7 +462,7 @@ const {
         }
         return this
     }
-    /** Deletes Records larger than the specified size (in bytes, for now)
+    /** Deletes Records larger than the specified size, in bytes
      * @param {number} maxBytes Delete Records larger than this (in bytes)
      * @since v2.2.0
      */
@@ -485,23 +506,24 @@ const {
         }
         return this
     }
- }
-  
- module.exports = dubnium
- module.exports.Dubnium = dubnium
-  
- /** Invoke CLI programmatically
+}
+
+module.exports = dubnium
+module.exports.Dubnium = dubnium
+
+
+/** Invoke CLI programmatically
  * @since 2.0.0
  */
- module.exports.cli = () => {
+module.exports.cli = () => {
     require("./cli")
- }
-  
-  
- module.exports.Template = class {
-  
+}
+
+
+module.exports.Template = class {
+
     template = {}
-  
+
     /** Set up a JSON template
      * @param {object} template The template
      * @since 2.0.0
@@ -509,7 +531,7 @@ const {
     constructor(template) {
         this.template = template
     }
-  
+
     /** Use template
      * @param values The values, in order from the template.
      * @since v2.0.1
@@ -524,5 +546,5 @@ const {
         }
         return t
     }
-  
- }
+
+}
