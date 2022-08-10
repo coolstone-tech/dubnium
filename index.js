@@ -310,7 +310,7 @@ const dubnium = class extends require("events") {
              */
             custom(callback = (record, recordPath) => {}) {
                 if (typeof callback != 'function') return t.get(tag)
-                this.emit("custom",callback)
+                t.emit("custom",callback)
                 callback(this, this.path)
                 return t.get(tag)
             }
