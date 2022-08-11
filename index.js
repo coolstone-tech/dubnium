@@ -17,7 +17,7 @@ const {
     watchFile,
     symlink,
     appendFileSync,
-    truncateSync
+    truncateSync,
 } = require('fs')
 
 const path = require('path')
@@ -46,8 +46,9 @@ const dubnium = class extends require("events") {
     /** Initialize a new database
      * @param {string} dirPath Path to dir
      * @param {string?} ext Custom file extension
+     * @param {bool?} temp Make dir in tmp dir
      */
-    constructor(dirPath, ext) {
+    constructor(dirPath, ext,temp) {
         super()
         this.dirPath = dirPath
         this.emit('start', dirPath, ext)
@@ -98,7 +99,6 @@ const dubnium = class extends require("events") {
             tag,
             data: t.ext == 'json' ? JSON.parse(d) : d,
             path: t.find(tag),
-            size: statSync(t.find(tag)).size,
             /** Exit the Record editor API
              * @since v2.2.0
              */
@@ -182,7 +182,7 @@ const dubnium = class extends require("events") {
             clone(dir) {
                 t.emit('clone', tag, t.dirPath, dir)
                 writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).data))
-                return new dubnium(dir, t.ext).get(tag)
+                return {original:t.get(tag),new:new dubnium(dir, t.ext).get(tag)}
             },
             /** Overwrite a Record with data from another Record
              * @param {string} _tag The tag of the Record to get data from
@@ -202,6 +202,7 @@ const dubnium = class extends require("events") {
             /** Run a function when a file is accessed
              * @param {function} listener Callback to run on accessed
              * @since v2.0.0
+             * @deprecated
              */
             watch(listener) {
                 watchFile(t.find(tag), {}, listener)
@@ -210,6 +211,7 @@ const dubnium = class extends require("events") {
             /** Stop watching
              * @param {function} listener
              * @since v2.0.0
+             * @deprecated
              */
             unwatch(listener) {
                 unwatchFile(t.find(tag), listener)
@@ -218,9 +220,7 @@ const dubnium = class extends require("events") {
             /** Get Record's stats
              * @since v2.0.0
              */
-            stats() {
-                return statSync(t.find(tag))
-            },
+            stats:statSync(t.find(tag)),
             /** Make an alias of a Record
              * @param {string} dirPath The path to create symlink in
              * @param {function} callback Callback
@@ -308,7 +308,7 @@ const dubnium = class extends require("events") {
             /** Run a custom callback function.
              * @since v2.2.2
              */
-            custom(callback = (record, recordPath) => {}) {
+            custom(callback = (record=this, recordPath="") => {}) {
                 if (typeof callback != 'function') return t.get(tag)
                 t.emit("custom",callback)
                 callback(this, this.path)
@@ -327,7 +327,7 @@ const dubnium = class extends require("events") {
     /** Run a custom callback function.
      * @since v2.2.2
      */
-    custom(callback = (Class, dirPath) => {}) {
+    custom(callback = (Class=new dubnium(), dirPath="") => {}) {
         this.emit("custom",callback)
         if (typeof callback != 'function') return t.get(tag)
         callback(this, this.dirPath)
@@ -462,16 +462,21 @@ const dubnium = class extends require("events") {
         }
         return this
     }
-    /** Deletes Records larger than the specified size, in bytes
-     * @param {number} maxBytes Delete Records larger than this (in bytes)
+    /** Deletes Records larger than the specified size
+     * @param {object} options Options
      * @since v2.2.0
      */
-    deleteLarge(maxBytes) {
-        if (maxBytes) {
-            this.emit("delete_large", maxBytes)
+    deleteLarge(options={ bytes:0, kilobytes:0, megabytes:0, gigabytes:0 }) {
+        let b = options.bytes ? options.bytes : 0
+        if(options.kilobytes) b += options.kilobytes * 1024
+        if(options.megabytes) b += options.megabytes * 1024 * 1024
+        if(options.gigabytes) b += options.gigabytes * 1024 * 1024 * 1024
+        console.log(b)
+        if (b) {
+            this.emit("delete_large", options)
             walkDir(this.dirPath, (filePath) => {
                 const stat = statSync(filePath)
-                if (stat.size > maxBytes) {
+                if (stat.size > b) {
                     this.get(path.basename(filePath).replace(`.${this.ext}`, '')).delete()
                     return
                 }
@@ -538,13 +543,14 @@ module.exports.Template = class {
      */
     use(...values) {
         let n = 0
-        const t = this.template
-        for (const e in this.template) {
-            if (typeof arguments[n] != typeof t[e]) console.warn(`Changed type of ${Object.keys(t).find(key => t[key] == t[e])} to ${typeof arguments[n]} [Arg #${n}]`)
-            if (arguments[n]) t[e] = arguments[n]
-            n++
-        }
-        return t
+        let r = new Object(this.template)
+        values.forEach(val => {
+        if(n > r.length) return
+        let key = Object.keys(this.template)[n]
+        if(typeof val != typeof r[key]) console.warn(`Changed type of ${Object.keys(this.template)[n]} to ${typeof val}`)
+        r[key] = val
+        n++
+        })
+        return r
     }
-
 }
