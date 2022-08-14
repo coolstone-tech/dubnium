@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://db.coolstone.dev
+    about: Please visit our docs to see if your issue is answered there.
+    - name: More links
+    url: https://github.com/coolstone-tech/dubnium/wiki
+    about: If you need more help, more links can be found here.
