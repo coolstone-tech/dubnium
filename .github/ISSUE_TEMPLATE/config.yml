@@ -1,5 +1,5 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: Documentation
-    url: https://db.coolstone.dev
-    about: Please visit our docs to see if your issue is answered there.
+  - name: Don't see what you need?
+    url: https://github.com/coolstone-tech/dubnium/discussions
+    about: Use Discussions for anything not listed above.
