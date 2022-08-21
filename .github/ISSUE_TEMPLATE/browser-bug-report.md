@@ -1,7 +1,7 @@
 ---
-name: Bug report
+name: Browser Bug Report
 about: Create a report to help us fix any problems for the browser version.
-title: ''
+title: "[BUG]"
 labels: browser, bug
 assignees: systemsoftware
 

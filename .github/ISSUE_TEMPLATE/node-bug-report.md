@@ -1,8 +1,8 @@
 ---
-name: Bug report
-about: Create a report to help us fix any problems for the browser version.
-title: ''
-labels: browser, bug
+name: Node Bug Report
+about: Create a report to help us fix any problems for the NPM package.
+title: "[BUG]"
+labels: bug, node
 assignees: systemsoftware
 
 ---
@@ -20,10 +20,10 @@ A clear and concise description of what you expected to happen.
 If applicable, add screenshots to help explain your problem.
 
 **Device information**
-- Browser: [e.g. Chrome]
-- Browser Version: [e.g. 104.0.5112.101 (Official Build) (arm64)]
  - Device: [e.g. Macbook Pro]
  - OS: [e.g. macOS 13.0]
+ - Node version [e.g. 16.13.2]
+ - Dubnium Version [e.g. 2.2.3]
 
 **Additional context**
 Add any other context about the problem here.
