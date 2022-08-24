@@ -46,9 +46,8 @@ const dubnium = class extends require("events") {
     /** Initialize a new database
      * @param {string} dirPath Path to dir
      * @param {string?} ext Custom file extension
-     * @param {bool?} temp Make dir in tmp dir
      */
-    constructor(dirPath, ext,temp) {
+    constructor(dirPath, ext) {
         super()
         this.dirPath = dirPath
         this.emit('start', dirPath, ext)
