@@ -20,6 +20,14 @@ import Dubnium from 'dubnium'
 const db = new Dubnium('dir','file extension')
 ```
 
+Browser
+```html
+<script src="https://coolstone.dev/dubnium/browser/v0.js"></script>
+<script>
+const db = new Dubnium('dir',false)
+</script>
+```
+
 ### Create Record
 
 ```js 
@@ -53,6 +61,6 @@ Read about it [here](https://db.coolstone.dev/key-features)
 ## Other info
 Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](https://discord.gg/nzTmfZ8), or ask a question on [Github](https://github.com/coolstone-tech/dubnium/discussions)
 
-Report feedback & bugs [here](https://groups.google.com/g/dubnium)
+Report feedback & bugs [here](https://github.com/coolstone-tech/dubnium/issues)
 
 Like our work? [Support us on Patreon](https://www.patreon.com/coolstone)
