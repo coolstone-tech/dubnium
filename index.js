@@ -119,10 +119,11 @@ const dubnium = class extends require("events") {
             path: t.find(tag),
             /** Full path to Record */
             realpath: realpathSync(t.find(tag)),
+            /** Run a plugin */
+            plugins:require("./plugins")
             /** Exit the Record editor API
              * @since v2.2.0
              */
-            plugins:require("./plugins"),
             exit() {
                 return t
             },
