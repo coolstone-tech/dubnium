@@ -13,14 +13,15 @@ const {
     renameSync,
     statSync,
     mkdirSync,
-    unwatchFile,
-    watchFile,
-    symlink,
     appendFileSync,
     truncateSync,
+    symlinkSync,
+    realpathSync
 } = require('fs')
 
 const path = require('path')
+
+if(!existsSync(`${__dirname}/plugins.js`)) writeFileSync(`${__dirname}/plugins.js`,'')
 
 const stringify = (data) => {
     return typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
@@ -29,7 +30,7 @@ const walkDir = (dir, callback) => {
     readdirSync(dir).forEach(f => {
         let dirPath = path.join(dir, f)
         let isDirectory = statSync(dirPath).isDirectory()
-        isDirectory ? this.walkDir(dirPath, callback) : callback(path.join(dir, f))
+        isDirectory ? walkDir(dirPath, callback) : callback(path.join(dir, f))
     })
 }
 const searchArray = (arr, val) => {
@@ -50,41 +51,53 @@ const dubnium = class extends require("events") {
     constructor(dirPath, ext) {
         super()
         this.dirPath = dirPath
-        this.emit('start', dirPath, ext)
-        if (!ext) {
-            this.ext = 'json'
+        const cf = `${dirPath}/dubniumconfig.json`
+        if (!existsSync(cf)) writeFileSync(cf, JSON.stringify({ext}))
+        const config = JSON.parse(readFileSync(cf))
+        if (existsSync(cf) && config.ext) {
+            this.ext = config.ext
         } else {
-            this.ext = ext.toLowerCase().trim()
+            this.ext = ext ? ext : 'json'
         }
+        this.emit('start', this.dirPath, this.ext)
     }
 
     /** Get the path to a Record
      * @since v2.2.1
+     * @param {string} tag Record's tag
+     * @param {bool?} realpath Return real path?
      */
-    find(tag = "") {
-        return `${this.dirPath}/${tag}.${this.ext}`
+    find(tag, realpath) {
+        const original = `${this.dirPath}/${tag}.${this.ext}`
+        return realpath ? realpathSync(original) : original
     }
 
     /** Make a new Record
      * @param {string} tag The Record's tag
-     * @param data Record's data
-     * @param {function?} callback
+     * @param content Record's content
      * @param {object?} options writeFile options
      */
-    create(tag, data, callback, options) {
-        if (this.exists(tag)) return this.get(tag)
-        this.emit("create", tag, stringify(data))
-        writeFileSync(this.find(tag), stringify(data), options)
-        if (callback) callback(this.get(tag))
+    create(tag, content, options) {
+        if (this.has(tag)) return this.get(tag)
+        this.emit("create", tag, stringify(content))
+        writeFileSync(this.find(tag), stringify(content), options)
         return this.get(tag)
     }
 
     /** Check if Record exists
      * @param {string} tag The Record's tag
      */
+    has(tag) {
+        return existsSync(this.find(tag))
+    }
+
+    /** Use `has()`
+     * @deprecated v2.3.0
+     */
     exists(tag) {
         return existsSync(this.find(tag))
     }
+
 
     /** Get Record
      * @param {string} tag The Record's tag
@@ -95,37 +108,45 @@ const dubnium = class extends require("events") {
         if (!this.find(tag) || !existsSync(this.find(tag))) return null
         const d = readFileSync(this.find(tag), 'utf8')
         return {
+            /**  Record's tag */
             tag,
+            /** Record's content */
+            content: t.ext == 'json' ? JSON.parse(d) : d,
+            /** Use `.content` 
+             * @deprecated v2.3.0 */
             data: t.ext == 'json' ? JSON.parse(d) : d,
+            /** Path to Record */
             path: t.find(tag),
+            /** Full path to Record */
+            realpath: realpathSync(t.find(tag)),
             /** Exit the Record editor API
              * @since v2.2.0
              */
+            plugins:require("./plugins"),
             exit() {
                 return t
             },
             /** Delete the Record */
             delete() {
-                t.emit("delete", tag, this.data)
+                t.emit("delete", tag, this.content)
                 rmSync(t.find(tag))
                 return t
             },
             /** Overwrite the Record's content
-             * @param data Record's data
+             * @param content New content to overwrite with
              */
-            overwrite(data) {
-                t.emit("overwrite", tag, t.get(tag).data, data)
-                writeFileSync(t.find(tag), stringify(data))
+            overwrite(content) {
+                t.emit("overwrite", tag, t.get(tag).content, content)
+                writeFileSync(t.find(tag), stringify(content))
                 return t.get(tag)
             },
-            /** Add data to end of a Record (Not recommend for JSON)
-             * @param data Data to append
-             * @param {object?} options appendFile options
+            /** Add content to end of a Record (Not recommend for JSON)
+             * @param content Content to append
              * @since 2.2.0
              */
-            append(data, options) {
-                t.emit("append", tag, stringify(data))
-                appendFileSync(t.find(tag), stringify(data), options)
+            append(content) {
+                t.emit("append", tag, stringify(content))
+                appendFileSync(t.find(tag), stringify(content))
                 return t.get(tag)
             },
             /** Truncate Record
@@ -143,15 +164,12 @@ const dubnium = class extends require("events") {
              */
             setValue(key, value) {
                 if (t.ext != 'json') {
-                    console.error("Use overwrite for your file type");
+                    console.error("Use overwrite for your file type")
                     return t.get(tag)
                 } else {
                     t.emit("change", tag, key, value)
-
-                    let jsonObj = t.get(tag).data
-
+                    let jsonObj = t.get(tag).content
                     jsonObj[key] = value
-
                     writeFileSync(t.find(tag), JSON.stringify(jsonObj, null, 2))
                     return t.get(tag)
                 }
@@ -170,7 +188,7 @@ const dubnium = class extends require("events") {
             move(dir) {
                 if (existsSync(dir)) {
                     t.emit('move', tag, t.dirPath, dir)
-                    writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).data))
+                    writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).content))
                     rmSync(t.find(tag))
                     return new dubnium(dir, t.ext).get(tag)
                 }
@@ -180,16 +198,19 @@ const dubnium = class extends require("events") {
              */
             clone(dir) {
                 t.emit('clone', tag, t.dirPath, dir)
-                writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).data))
-                return {original:t.get(tag),new:new dubnium(dir, t.ext).get(tag)}
+                writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).content))
+                return {
+                    original: t.get(tag),
+                    new: new dubnium(dir, t.ext).get(tag)
+                }
             },
-            /** Overwrite a Record with data from another Record
-             * @param {string} _tag The tag of the Record to get data from
+            /** Overwrite a Record with cotent from another Record
+             * @param {string} _tag The tag of the Record to get content from
              * @since v2.0.0
              */
             syncWith(_tag) {
                 t.emit("synced", tag, _tag)
-                return t.get(tag).overwrite(t.get(_tag).data)
+                return t.get(tag).overwrite(t.get(_tag).content)
             },
             /** Don't allow any functions to be called after.
              * @since v2.0.0
@@ -198,47 +219,28 @@ const dubnium = class extends require("events") {
             end() {
                 t.emit("end")
             },
-            /** Run a function when a file is accessed
-             * @param {function} listener Callback to run on accessed
-             * @since v2.0.0
-             * @deprecated
-             */
-            watch(listener) {
-                watchFile(t.find(tag), {}, listener)
-                return t.get(tag)
-            },
-            /** Stop watching
-             * @param {function} listener
-             * @since v2.0.0
-             * @deprecated
-             */
-            unwatch(listener) {
-                unwatchFile(t.find(tag), listener)
-                return t.get(tag)
-            },
             /** Get Record's stats
              * @since v2.0.0
              */
-            stats:statSync(t.find(tag)),
+            stats: statSync(t.find(tag)),
             /** Make an alias of a Record
              * @param {string} dirPath The path to create symlink in
-             * @param {function} callback Callback
              * @since v2.0.0
              */
-            createSymlink(dirPath, callback) {
+            createSymlink(dirPath) {
                 t.emit("symlink", tag, dirPath)
-                symlink(path.join(t.dirPath, `${this.tag}.${t.ext}`), dirPath, callback)
+                symlinkSync(path.join(t.dirPath, `${this.tag}.${t.ext}`), dirPath)
                 return t.get(tag)
             },
             /** Search Record content
              * @since v2.1.0
              * @param {string} query Search query
-             * @param {string} splitBy String to split the Record's data by. For example, "\n" for lines or " " for spaces.
+             * @param {string} splitBy String to split the Record's content by. For example, "\n" for lines or " " for spaces.
              */
             search(query, splitBy) {
                 let results = []
                 if (!query) return null
-                const lines = stringify(this.data).split(splitBy || " ")
+                const lines = stringify(this.content).split(splitBy || " ")
                 for (let i = 0; i < lines.length; i++) {
                     if (lines[i].search(query) !== -1) {
                         results.push(lines[i])
@@ -256,7 +258,7 @@ const dubnium = class extends require("events") {
              */
             searchKeys(query) {
                 let results = {}
-                const obj = t.get(tag).data
+                const obj = t.get(tag).content
                 for (let key in obj) {
                     if (obj[key]) {
                         if (obj.hasOwnProperty(key)) {
@@ -272,17 +274,17 @@ const dubnium = class extends require("events") {
                     results
                 }
             },
-            /** Convert the Record's data to string
+            /** Convert the Record's content to string
              * @since v2.0.0
              */
             toString() {
-                return stringify(this.data)
+                return stringify(this.content)
             },
-            /** Convert the Record's data to an object, if possible
+            /** Convert the Record's content to an object, if possible
              * @since v2.0.0
              */
             toJSON() {
-                return new Object(this.data)
+                return new Object(this.content)
             },
             /** Run any function from `fs`. If you wish to get the return value, access the `returns` property
              * @param {string} Function The function (name) to run
@@ -298,7 +300,7 @@ const dubnium = class extends require("events") {
                 args.forEach(e => {
                     arr.push(e)
                 })
-                t.emit("other",Function,args)
+                t.emit("other", Function, args)
                 const f = require('fs')[Function].apply(null, arr)
                 r.returns = f
                 return r
@@ -307,9 +309,9 @@ const dubnium = class extends require("events") {
             /** Run a custom callback function.
              * @since v2.2.2
              */
-            custom(callback = (record=this, recordPath="") => {}) {
+            custom(callback = (record = this, recordPath = "") => {}) {
                 if (typeof callback != 'function') return t.get(tag)
-                t.emit("custom",callback)
+                t.emit("custom", callback)
                 callback(this, this.path)
                 return t.get(tag)
             }
@@ -326,8 +328,8 @@ const dubnium = class extends require("events") {
     /** Run a custom callback function.
      * @since v2.2.2
      */
-    custom(callback = (Class=new dubnium(), dirPath="") => {}) {
-        this.emit("custom",callback)
+    custom(callback = (Class = this, dirPath = "") => {}) {
+        this.emit("custom", callback)
         if (typeof callback != 'function') return t.get(tag)
         callback(this, this.dirPath)
         return this
@@ -352,14 +354,14 @@ const dubnium = class extends require("events") {
             obj_of_data = {}
 
             array_of_filenames.forEach(filename => {
-                obj_of_data[filename.replace('.' + this.ext, '')] = this.get(path.basename(filename).replace(path.extname(filename), "")).data
+                obj_of_data[filename.replace('.' + this.ext, '')] = this.get(path.basename(filename).replace(path.extname(filename), "")).content
             })
         } else if (returnType == 2) {
             obj_of_data = []
             array_of_filenames.forEach(f => {
                 obj_of_data.push({
                     tag: path.basename(f).replace(path.extname(f), ""),
-                    data: this.get(path.basename(f).replace(path.extname(f), "")).data
+                    content: this.get(path.basename(f).replace(path.extname(f), "")).content
                 })
             })
         }
@@ -377,7 +379,7 @@ const dubnium = class extends require("events") {
         if (this.ext != 'json') return
         let data = returnType == 1 ? {} : []
         this.getAll(2).forEach(d => {
-            if (d.data[key] == value) {
+            if (d.content[key] == value) {
                 returnType == 1 ? data[d.tag] = this.get(d.tag) : data.push(this.get(d.tag))
             }
 
@@ -409,10 +411,7 @@ const dubnium = class extends require("events") {
         } else {
             res = []
             r.forEach(f => {
-                res.push({
-                    tag: f,
-                    data: this.get(f)
-                })
+                res.push(this.get(f))
             })
         }
         return {
@@ -450,7 +449,7 @@ const dubnium = class extends require("events") {
             ms += options.seconds * 1000
         }
         if (ms) {
-            this.emit("delete_old", ms)
+            this.emit("delete_old", options)
             walkDir(this.dirPath, (filePath) => {
                 const stat = statSync(filePath)
                 if (new Date().getTime() > new Date(stat.mtime).getTime() + ms) {
@@ -465,12 +464,16 @@ const dubnium = class extends require("events") {
      * @param {object} options Options
      * @since v2.2.0
      */
-    deleteLarge(options={ bytes:0, kilobytes:0, megabytes:0, gigabytes:0 }) {
+    deleteLarge(options = {
+        bytes: 0,
+        kilobytes: 0,
+        megabytes: 0,
+        gigabytes: 0
+    }) {
         let b = options.bytes ? options.bytes : 0
-        if(options.kilobytes) b += options.kilobytes * 1024
-        if(options.megabytes) b += options.megabytes * 1024 * 1024
-        if(options.gigabytes) b += options.gigabytes * 1024 * 1024 * 1024
-        console.log(b)
+        if (options.kilobytes) b += options.kilobytes * 1024
+        if (options.megabytes) b += options.megabytes * 1024 * 1024
+        if (options.gigabytes) b += options.gigabytes * 1024 * 1024 * 1024
         if (b) {
             this.emit("delete_large", options)
             walkDir(this.dirPath, (filePath) => {
@@ -487,10 +490,10 @@ const dubnium = class extends require("events") {
     wipe() {
         if (!existsSync(this.dirPath)) return this
         this.emit('wipe', this.dirPath)
-        rmSync(this.dirPath, {
-            recursive: true
+        readdirSync(this.dirPath).forEach(file => {
+            if (file.toLowerCase() == 'dubniumconfig.json') return
+            rmSync(this.find(file.replace(require("path").extname(file), '')))
         })
-        mkdirSync(this.dirPath)
         return this
     }
     /** Delete all Records & the directory */
@@ -510,6 +513,8 @@ const dubnium = class extends require("events") {
         }
         return this
     }
+
+    plugins = require("./plugins")
 }
 
 module.exports = dubnium
@@ -523,6 +528,15 @@ module.exports.cli = () => {
     require("./cli")
 }
 
+/** Create a Record */
+module.exports.Record = (options = {
+    dir: "./",
+    ext: "json",
+    tag: "tag",
+    content
+}) => {
+    return new dubnium(options.dir, options.ext).create(options.tag, stringify(options.content))
+}
 
 module.exports.Template = class {
 
@@ -542,14 +556,26 @@ module.exports.Template = class {
      */
     use(...values) {
         let n = 0
-        let r = new Object(this.template)
+        const r = this.template
         values.forEach(val => {
-        if(n > r.length) return
-        let key = Object.keys(this.template)[n]
-        if(typeof val != typeof r[key]) console.warn(`Changed type of ${Object.keys(this.template)[n]} to ${typeof val}`)
-        r[key] = val
-        n++
+            if (n > r.length) return
+            let key = Object.keys(this.template)[n]
+            if (typeof val != typeof r[key]) console.warn(`Changed type of ${Object.keys(this.template)[n]} to ${typeof val}`)
+            r[key] = val
+            n++
         })
         return r
     }
+}
+
+/** Manage your plugins */
+module.exports.PluginManager = { 
+    /** Load plugins config from a file
+     * @param file Path to file.
+     */
+    loadFromFile(file) {
+    writeFileSync(`${__dirname}/plugins.js`, readFileSync(file,'utf8'))
+    },
+    /** Get a list of active plugins */
+    activePlugins:require("./plugins")
 }
