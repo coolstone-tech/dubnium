@@ -1,0 +1,25 @@
+name: Documentation Issue
+description: Report an issue with our documentation or README
+assignees: systemsoftware
+labels: "documentation"
+
+body:
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue
+      description: Docs not clear, spelling/grammar error, method not documented, etc
+    validations:
+      required: true
+  - type: textarea
+    id: loc
+    attributes:
+      label: Location
+      description: Where did you find this issue? For example, the Delete Large section on Create & Delete page.
+    validations:
+      required: true
+  - type: textarea
+    id: sol
+    attributes:
+      label: Solution
+      description: If you have a solution, for example, a better way to word something, put it here.
