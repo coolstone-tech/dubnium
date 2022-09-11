@@ -1,0 +1,27 @@
+name: Browser Bug Report
+description: Create a report to help us fix any problems for the browser version
+assignees: systemsoftware
+labels: [ "browser", "bug" ]
+
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: method
+    attributes:
+      label: Method
+      description: Which API method threw the error
+    validations:
+      required: true
+  - type: textarea
+    id: os
+    attributes:
+      label: Device Info
+      description: Browser name & version, device model & os version
+    validations:
+      required: true
