@@ -4,43 +4,43 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
-
-
-const stringify = (data) => {
-    return typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
-}
-
-const searchArray = (arr, val) => {
+ 
+ 
+const stringify = (content) => {
+    return typeof content == 'object' ? JSON.stringify(content, null, 2) : String(content)
+ }
+  
+ const searchArray = (arr, val) => {
     return arr.filter(el => {
         return el.match(new RegExp(val, 'gi'))
     })
-}
-
-
-class Dubnium {
+ }
+  
+  
+ class Dubnium {
     type = ''
     storeIn = localStorage
     constructor(type,temp) {
         this.type = type ? type : 'text'
         this.storeIn = temp ? sessionStorage : localStorage
     }
-
-    create(tag, data) {
-        if (this.exists(tag)) return this.get(tag)
-        this.storeIn.setItem(tag,stringify(data))
+  
+    create(tag, content) {
+        if (this.has(tag)) return this.get(tag)
+        this.storeIn.setItem(tag,stringify(content))
         return this.get(tag)
     }
-
-    exists(tag) {
+  
+    has(tag) {
         return this.storeIn.getItem(tag) ? true : false
     }
-
+  
     get(tag) {
         const t = this
         const d = this.storeIn.getItem(tag)
         return {
             tag,
-            data: t.type == 'json' ? JSON.parse(d) : d,
+            content: t.type == 'json' ? JSON.parse(d) : d,
             exit() {
                 return t
             },
@@ -48,18 +48,18 @@ class Dubnium {
                 t.storeIn.removeItem(tag)
                 return t
             },
-    
-            overwrite(data) {
-                t.storeIn.setItem(tag,data)
+   
+            overwrite(content) {
+                t.storeIn.setItem(tag,content)
                 return t.get(tag)
             },
-            append(data) {
-                const nd = stringify(this.data) + stringify(data)
+            append(content) {
+                const nd = stringify(this.content) + stringify(content)
                 t.storeIn.setItem(tag,stringify(nd))
                 return t.get(tag)
             },
             truncate(start,end) {
-                const nd = stringify(this.data).substring(start,end)
+                const nd = stringify(this.content).substring(start,end)
                 t.storeIn.setItem(tag,nd)
                 return t.get(tag)
             },
@@ -68,26 +68,26 @@ class Dubnium {
                     console.error("Use overwrite for your file type")
                     return t.get(tag)
                 } else {
-                    let jsonObj = JSON.parse(this.data)
+                    let jsonObj = JSON.parse(this.content)
                     jsonObj[key] = value
                     t.storeIn.setItem(tag,stringify(jsonObj))
                     return t.get(tag)
                 }
             },
             setTag(new_tag) {
-                let data = t.storeIn.getItem(tag)
-                t.storeIn.setItem(new_tag,stringify(data))
+                let content = t.storeIn.getItem(tag)
+                t.storeIn.setItem(new_tag,stringify(content))
                 t.storeIn.removeItem(tag)
                 return t.get(new_tag)
             },
             syncWith(_tag) {
-        return t.get(tag).overwrite(t.get(_tag).data)
+        return t.get(tag).overwrite(t.get(_tag).content)
             },
             end() { return },
             search(query, splitBy) {
                 let results = []
                 if (!query) return null
-                const lines = stringify(this.data).split(splitBy || " ")
+                const lines = stringify(this.content).split(splitBy || " ")
                 for (let i = 0; i < lines.length; i++) {
                     if (lines[i].search(query) !== -1) {
                         results.push(lines[i])
@@ -102,7 +102,7 @@ class Dubnium {
             },
             searchKeys(query) {
                 let results = {}
-                const obj = t.get(tag).data
+                const obj = t.get(tag).content
                 for (let key in obj) {
                     if (obj[key]) {
                         if (obj.hasOwnProperty(key)) {
@@ -119,10 +119,10 @@ class Dubnium {
                 }
             },
             toString() {
-                return stringify(this.data)
+                return stringify(this.content)
             },
             toJSON() {
-                return new Object(this.data)
+                return new Object(this.content)
             },
             custom(callback = (record=this) => {}) {
                 if (typeof callback != 'function') return t.get(tag)
@@ -132,59 +132,59 @@ class Dubnium {
         }
     }
     end() { return }
-
+  
     custom(callback = (db=new dubnium()) => {}) {
         if (typeof callback != 'function') return t.get(tag)
         callback(this)
         return this
     }
-
-
+  
+  
     getAll(returnType) {
         let array_of_filenames = []
         for (let i = 0; i < this.storeIn.length; i++){
             array_of_filenames.push(this.storeIn.key(i))
         }
-
-        let obj_of_data
-
+  
+        let obj_of_content
+  
         if (returnType == 1) {
-            obj_of_data = {}
-
+            obj_of_content = {}
+  
             array_of_filenames.forEach(filename => {
-                obj_of_data[filename]= this.get(filename).data
+                obj_of_content[filename]= this.get(filename).content
             })
         } else if (returnType == 2) {
-            obj_of_data = []
+            obj_of_content = []
             array_of_filenames.forEach(f => {
-                obj_of_data.push({
+                obj_of_content.push({
                     tag: f,
-                    data: this.get(f).data
+                    content: this.get(f).content
                 })
             })
         }
-
-        return obj_of_data
+  
+        return obj_of_content
     }
-
+  
     getFromValue(key, value, returnType) {
         if (this.type != 'json') return this
-        let data = returnType == 1 ? {} : []
+        let content = returnType == 1 ? {} : []
         this.getAll(2).forEach(d => {
-            if (d.data[key] == value) {
-                returnType == 1 ? data[d.tag] = this.get(d.tag) : data.push(this.get(d.tag))
+            if (d.content[key] == value) {
+                returnType == 1 ? content[d.tag] = this.get(d.tag) : content.push(this.get(d.tag))
             }
-
+  
         })
-        return data
+        return content
     }
     searchTags(query, returnType) {
         const list = []
         for (let i = 0; i < this.storeIn.length; i++){
             list.push(this.storeIn.key(i))
         }
-
-
+  
+  
         const r = searchArray(list, query)
         let res = []
         if (returnType && returnType == 1) {
@@ -197,7 +197,7 @@ class Dubnium {
             r.forEach(f => {
                 res.push({
                     tag: f,
-                    data: this.get(f)
+                    content: this.get(f)
                 })
             })
         }
@@ -206,14 +206,12 @@ class Dubnium {
             results: res
         }
     }
-}
-
-const record = () => {
-    (options={ type:"json", tag:"tag", temp:false, data }) => {return new dubnium(options.type,options.temp).create(options.tag,stringify(options.data))}
-
-}
-
-class Template {
+ }
+  
+ const record = (options={ type:"json", tag:"tag", temp:false, content }) => {return new Dubnium(options.type,options.temp).create(options.tag,stringify(options.content))}
+  
+  
+ class Template {
     template = {}
     constructor(template) {
         this.template = template
@@ -230,4 +228,4 @@ class Template {
         })
         return r
     }
-}
+ }
