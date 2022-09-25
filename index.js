@@ -23,53 +23,49 @@ const path = require('path')
 
 if(!existsSync(`${__dirname}/plugins.js`)) writeFileSync(`${__dirname}/plugins.js`,'')
 
-const stringify = (data) => {
-    return typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
-}
-const walkDir = (dir, callback) => {
-    readdirSync(dir).forEach(f => {
-        let dirPath = path.join(dir, f)
-        let isDirectory = statSync(dirPath).isDirectory()
-        isDirectory ? walkDir(dirPath, callback) : callback(path.join(dir, f))
-    })
-}
-const searchArray = (arr, val) => {
-    return arr.filter(el => {
-        return el.match(new RegExp(val, 'gi'))
-    })
-}
 
+const stringify = (data) => typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
+const walkDir = (dir, callback) => readdirSync(dir).forEach(f => {statSync(path.join(dir, f)).isDirectory() ? walkDir(path.join(dir, f), callback) : callback(path.join(dir, f))  })
+const searchArray = (arr=[], val="") => arr.filter(el => { return el.match(new RegExp(val, 'gi')) })
+const fp = (path="") => realpathSync(path.replace("~", require("os").homedir()))
+
+module.exports.fullPath = fp
+module.exports.searchArray = searchArray
+module.exports.iterateDir = walkDir
 
 const dubnium = class extends require("events") {
     dirPath = ''
     ext = ''
+    name = ''
 
     /** Initialize a new database
      * @param {string} dirPath Path to dir
      * @param {string?} ext Custom file extension
+     * @param {bool} useConfig Use config file. Default: `true`
      */
-    constructor(dirPath, ext) {
+    constructor(dirPath, ext, useConfig=true) {
         super()
-        this.dirPath = dirPath
+        this.dirPath = fp(dirPath)
+        this.name = path.basename(dirPath)
         const cf = `${dirPath}/dubniumconfig.json`
+        if(!existsSync(dirPath)) this.dir()
         if (!existsSync(cf)) writeFileSync(cf, JSON.stringify({ext}))
         const config = JSON.parse(readFileSync(cf))
-        if (existsSync(cf) && config.ext) {
+        if (existsSync(cf) && config.ext && useConfig != false) {
             this.ext = config.ext
         } else {
             this.ext = ext ? ext : 'json'
         }
         this.emit('start', this.dirPath, this.ext)
     }
-
     /** Get the path to a Record
      * @since v2.2.1
      * @param {string} tag Record's tag
-     * @param {bool?} realpath Return real path?
+     * @param {bool?} full Return full path
      */
-    find(tag, realpath) {
+    find(tag, full) {
         const original = `${this.dirPath}/${tag}.${this.ext}`
-        return realpath ? realpathSync(original) : original
+        return full ? fp(original) : original
     }
 
     /** Make a new Record
@@ -91,14 +87,6 @@ const dubnium = class extends require("events") {
         return existsSync(this.find(tag))
     }
 
-    /** Use `has()`
-     * @deprecated v2.3.0
-     */
-    exists(tag) {
-        return existsSync(this.find(tag))
-    }
-
-
     /** Get Record
      * @param {string} tag The Record's tag
      * @returns Record
@@ -112,15 +100,16 @@ const dubnium = class extends require("events") {
             tag,
             /** Record's content */
             content: t.ext == 'json' ? JSON.parse(d) : d,
-            /** Use `.content` 
-             * @deprecated v2.3.0 */
-            data: t.ext == 'json' ? JSON.parse(d) : d,
             /** Path to Record */
             path: t.find(tag),
             /** Full path to Record */
-            realpath: realpathSync(t.find(tag)),
-            /** Run a plugin */
-            plugins:require("./plugins")
+            realpath: fp(t.find(tag)),
+            /** Use a plugin
+             * @since v2.3.1
+             */
+            usePlugin(plugin){
+                return { returns: require("./plugins")[plugin](t, this), record:this }
+            },
             /** Exit the Record editor API
              * @since v2.2.0
              */
@@ -341,8 +330,9 @@ const dubnium = class extends require("events") {
      */
     getAll(returnType) {
         let array_of_filenames = []
+        if(!returnType) returnType = 2
         for (const f of readdirSync(this.dirPath)) {
-            if (f != '.DS_Store') {
+            if (f != '.DS_Store') {  
                 if (path.extname(f).toLowerCase().replace(".", '') == this.ext) {
                     array_of_filenames.push(f)
                 }
@@ -377,7 +367,8 @@ const dubnium = class extends require("events") {
      * @param {string} returnType 1: Return as JSON. 2: Return as Array
      */
     getFromValue(key, value, returnType) {
-        if (this.ext != 'json') return
+        if(!returnType) returnType = 2
+        if (this.ext != 'json') return this
         let data = returnType == 1 ? {} : []
         this.getAll(2).forEach(d => {
             if (d.content[key] == value) {
@@ -394,6 +385,7 @@ const dubnium = class extends require("events") {
      */
     searchTags(term, returnType) {
         const list = []
+        if(!returnType) returnType = 2
         for (const f of readdirSync(this.dirPath)) {
             if (f != '.DS_Store') {
                 if (path.extname(f).toLowerCase().replace(".", '') == this.ext) {
@@ -454,8 +446,7 @@ const dubnium = class extends require("events") {
             walkDir(this.dirPath, (filePath) => {
                 const stat = statSync(filePath)
                 if (new Date().getTime() > new Date(stat.mtime).getTime() + ms) {
-                    this.get(path.basename(filePath).replace(`.${this.ext}`, '')).delete()
-                    return
+                    rmSync(filePath)
                 }
             })
         }
@@ -480,8 +471,7 @@ const dubnium = class extends require("events") {
             walkDir(this.dirPath, (filePath) => {
                 const stat = statSync(filePath)
                 if (stat.size > b) {
-                    this.get(path.basename(filePath).replace(`.${this.ext}`, '')).delete()
-                    return
+                rmSync(filePath)
                 }
             })
         }
@@ -493,7 +483,7 @@ const dubnium = class extends require("events") {
         this.emit('wipe', this.dirPath)
         readdirSync(this.dirPath).forEach(file => {
             if (file.toLowerCase() == 'dubniumconfig.json') return
-            rmSync(this.find(file.replace(require("path").extname(file), '')))
+            rmSync(`${this.dirPath}/${file}`)
         })
         return this
     }
@@ -515,7 +505,29 @@ const dubnium = class extends require("events") {
         return this
     }
 
-    plugins = require("./plugins")
+/** Run a bash command
+ * @param {string} command The command (include arguments)
+ */
+bash(command, callback=(err="",stdout="")=>{}){
+    require("child_process").exec(command, { cwd:this.dirPath }, callback ? callback : () => {})
+    return this
+}
+
+plugins = require("./plugins")
+/** Use a plugin
+* @since v2.3.1
+*/
+usePlugin(plugin){
+    return { returns: require("./plugins")[plugin](this, null), dubnium:this }
+}
+
+/** iterate dir
+ * @param {function} callback Callback
+ */
+iterate(callback){
+walkDir(this.dirPath, callback)
+}
+
 }
 
 module.exports = dubnium
@@ -572,7 +584,7 @@ module.exports.Template = class {
 /** Manage your plugins */
 module.exports.PluginManager = { 
     /** Load plugins config from a file
-     * @param file Path to file.
+     * @param {string} file Path to file.
      */
     loadFromFile(file) {
     writeFileSync(`${__dirname}/plugins.js`, readFileSync(file,'utf8'))
