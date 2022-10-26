@@ -24,4 +24,4 @@ body:
       label: Device info
       description: Node & package version, device model & os version.
     validations:
-      required: true
+      required: false
