@@ -24,4 +24,4 @@ body:
       label: Device Info
       description: Browser name & version, device model & os version
     validations:
-      required: true
+      required: false
