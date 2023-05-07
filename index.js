@@ -1,9 +1,3 @@
-/*
-Copyright 2022 CoolStone Technologies
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
 const {
     existsSync,
     writeFileSync,
@@ -16,236 +10,156 @@ const {
     appendFileSync,
     truncateSync,
     symlinkSync,
-    realpathSync
+    watch,
+    readdir,
 } = require('fs')
 
+const {
+    stringify,
+    fullPath,
+    walkDir,
+    searchArray
+} = require('./functions')
+
 const path = require('path')
+const {
+    homedir
+} = require('os')
 
-if(!existsSync(`${__dirname}/plugins.js`)) writeFileSync(`${__dirname}/plugins.js`,'')
+const DubniumError = class extends Error {
+    constructor(message) {
+        super(message)
+        this.name = 'DubniumError'
+    }
+}
 
-
-const stringify = (data) => typeof data == 'object' ? JSON.stringify(data, null, 2) : String(data)
-const walkDir = (dir, callback) => readdirSync(dir).forEach(f => {statSync(path.join(dir, f)).isDirectory() ? walkDir(path.join(dir, f), callback) : callback(path.join(dir, f))  })
-const searchArray = (arr=[], val="") => arr.filter(el => { return el.match(new RegExp(val, 'gi')) })
-const fp = (path="") => realpathSync(path.replace("~", require("os").homedir()))
-
-module.exports.fullPath = fp
-module.exports.searchArray = searchArray
-module.exports.iterateDir = walkDir
-
-const dubnium = class extends require("events") {
-    dirPath = ''
-    ext = ''
-    name = ''
-
-    /** Initialize a new database
-     * @param {string} dirPath Path to dir
-     * @param {string?} ext Custom file extension
-     * @param {bool} useConfig Use config file. Default: `true`
-     */
-    constructor(dirPath, ext, useConfig=true) {
-        super()
-        this.dirPath = fp(dirPath)
-        this.name = path.basename(dirPath)
-        const cf = `${dirPath}/dubniumconfig.json`
-        if(!existsSync(dirPath)) this.dir()
-        if (!existsSync(cf)) writeFileSync(cf, JSON.stringify({ext}))
-        const config = JSON.parse(readFileSync(cf))
-        if (existsSync(cf) && config.ext && useConfig != false) {
-            this.ext = config.ext
-        } else {
-            this.ext = ext ? ext : 'json'
+class Dubnium extends require('events') {
+    config = {
+        dir: '',
+        ext: 'json',
+        force: false,
+        preserveConfig: false,
+        versioning: {
+            temp: true,
+            file: true,
+            max: 10,
         }
-        this.emit('start', this.dirPath, this.ext)
-    }
-    /** Get the path to a Record
-     * @since v2.2.1
-     * @param {string} tag Record's tag
-     * @param {bool?} full Return full path
-     */
-    find(tag, full) {
-        const original = `${this.dirPath}/${tag}.${this.ext}`
-        return full ? fp(original) : original
+        }
+
+    #watcher = null
+
+    name = path.basename(this.config.dir)
+
+    constructor(dir = "", ext = "", options = this.config) {
+        super()
+        if(!dir) throw new DubniumError('No directory specified')
+        if(!ext) console.warn('No extension specified, using "json"')
+        this.emit('start', dir, ext, options)
+        this.config = options
+        this.config.dir = dir.replace('~', homedir())
+        this.config.ext = ext || 'json'
+        if (!existsSync(dir)) mkdirSync(dir)
+        if (!existsSync(`${dir}/.dubnium`)) mkdirSync(`${dir}/.dubnium`)
+        if (!existsSync(`${dir}/.dubnium/config.json`) && !preserveConfig) writeFileSync(`${dir}/.dubnium/config.json`, stringify(this.config))
+        this.name = options.name || path.basename(dir)
+        if(!options.versioning.temp && !options.versioning.file) return
+        this.startVersioning(this.config.versioning)
     }
 
-    /** Make a new Record
-     * @param {string} tag The Record's tag
-     * @param content Record's content
-     * @param {object?} options writeFile options
+    /**
+     * Get the path to a Record
+     * @param {string} tag The tag to locate
+     * @returns {string} record path
      */
-    create(tag, content, options) {
-        if (this.has(tag)) return this.get(tag)
-        this.emit("create", tag, stringify(content))
-        writeFileSync(this.find(tag), stringify(content), options)
-        return this.get(tag)
+    locate(tag) {
+        return `${this.config.dir}/${tag}.${this.config.ext}`
     }
 
-    /** Check if Record exists
-     * @param {string} tag The Record's tag
+    /**
+     * Check if a Record exists
+     * @param {string} tag The tag to check
+     * @returns {boolean} Whether the Record exists
      */
     has(tag) {
-        return existsSync(this.find(tag))
+        return existsSync(this.locate(tag))
     }
 
-    /** Get Record
-     * @param {string} tag The Record's tag
+    #check(tag) {
+        if (!existsSync(`${this.config.dir}/.dubnium`)) mkdirSync(`${this.config.dir}/.dubnium`)
+        if(!existsSync(`${this.config.dir}/.dubnium/versions/`)) mkdirSync(`${this.config.dir}/.dubnium/versions`)
+        if (tag && !this.has(this.locate(tag))) throw new DubniumError(`File ${this.locate(tag)} does not exist`)
+    }
+
+    /**
+     * Get a Record
+     * @param {string} tag Tag of the Record to get 
      * @returns Record
      */
     get(tag) {
-        const t = this
-        if (!this.find(tag) || !existsSync(this.find(tag))) return null
-        const d = readFileSync(this.find(tag), 'utf8')
+        const file = this.locate(tag)
+        const _this = this
+        if (!existsSync(file)) return null
         return {
-            /**  Record's tag */
+            /** Record content */
+            content: _this.config.ext == 'json' ? JSON.parse(readFileSync(file, 'utf8')) : readFileSync(file, 'utf8'),
+            /** Record tag */
             tag,
-            /** Record's content */
-            content: t.ext == 'json' ? JSON.parse(d) : d,
-            /** Path to Record */
-            path: t.find(tag),
-            /** Full path to Record */
-            realpath: fp(t.find(tag)),
-            /** Use a plugin
-             * @since v2.3.1
+            /** Record path */
+            path: file,
+            /** Record full path */
+            realpath:fullPath(file),
+            /** Record stats */
+            stats: statSync(file),
+            /** Delete the Record
+             * @returns database
              */
-            usePlugin(plugin){
-                return { returns: require("./plugins")[plugin](t, this), record:this }
-            },
-            /** Exit the Record editor API
-             * @since v2.2.0
-             */
-            exit() {
-                return t
-            },
-            /** Delete the Record */
             delete() {
-                t.emit("delete", tag, this.content)
-                rmSync(t.find(tag))
-                return t
+                _this.delete(tag)
+                return _this
             },
-            /** Overwrite the Record's content
-             * @param content New content to overwrite with
-             */
-            overwrite(content) {
-                t.emit("overwrite", tag, t.get(tag).content, content)
-                writeFileSync(t.find(tag), stringify(content))
-                return t.get(tag)
+            /** Edit the Record
+             * @param {string} content New content
+             * @returns Record
+             * */
+            edit(content) {
+                _this.edit(tag, content)
+                return this
             },
-            /** Add content to end of a Record (Not recommend for JSON)
-             * @param content Content to append
-             * @since 2.2.0
-             */
-            append(content) {
-                t.emit("append", tag, stringify(content))
-                appendFileSync(t.find(tag), stringify(content))
-                return t.get(tag)
+            /** Save the Record
+             * @returns Record
+             * */
+            save() {
+                _this.edit(tag, this.content)
+                _this.emit('save',this.tag, this.content)
+                return this
             },
-            /** Truncate Record
-             * @param {number} length New file length.
-             * @since 2.2.0
-             */
-            truncate(length) {
-                t.emit("truncate", tag, length)
-                truncateSync(t.find(tag), length)
-                return t.get(tag)
+            /** Set the Record's tag
+             * @param {string} newTag New tag
+             * @returns Record
+             * */
+            setTag(newTag) {
+                _this.setTag(tag, newTag)
+                return this
             },
-            /** Change Record's value (JSON only)
-             * @param {string} key JSON Key
-             * @param value Key's value
-             */
-            setValue(key, value) {
-                if (t.ext != 'json') {
-                    console.error("Use overwrite for your file type")
-                    return t.get(tag)
-                } else {
-                    t.emit("change", tag, key, value)
-                    let jsonObj = t.get(tag).content
-                    jsonObj[key] = value
-                    writeFileSync(t.find(tag), JSON.stringify(jsonObj, null, 2))
-                    return t.get(tag)
-                }
+            /** Search the Record's content
+             * @param {string} query Query to search for
+             * @param {string} splitBy Split the content by this
+             * @returns {string} Result
+             * */
+            searchAsArray(query, splitBy){
+                return searchArray(String(this.content).split(splitBy || ' '), query)
             },
-            /** Change Record's tag
-             * @param {string} new_tag The new tag
-             */
-            setTag(new_tag) {
-                t.emit("retagged", tag, new_tag)
-                renameSync(t.find(tag), t.find(new_tag))
-                return t.get(new_tag)
+            /** Search the Record's content
+             * @param {string} query Query to search for
+             * @returns {string} Result
+             * */
+            search(query){
+            return stringify(this.content).search(query)
             },
-            /** Move Record to another directory
-             * @param {string} dir The directory to move to
-             */
-            move(dir) {
-                if (existsSync(dir)) {
-                    t.emit('move', tag, t.dirPath, dir)
-                    writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).content))
-                    rmSync(t.find(tag))
-                    return new dubnium(dir, t.ext).get(tag)
-                }
-            },
-            /** Clone Record to another directory
-             * @param {string} dir The directory to clone to
-             */
-            clone(dir) {
-                t.emit('clone', tag, t.dirPath, dir)
-                writeFileSync(`${dir}/${tag}.${t.ext}`, stringify(t.get(tag).content))
-                return {
-                    original: t.get(tag),
-                    new: new dubnium(dir, t.ext).get(tag)
-                }
-            },
-            /** Overwrite a Record with cotent from another Record
-             * @param {string} _tag The tag of the Record to get content from
-             * @since v2.0.0
-             */
-            syncWith(_tag) {
-                t.emit("synced", tag, _tag)
-                return t.get(tag).overwrite(t.get(_tag).content)
-            },
-            /** Don't allow any functions to be called after.
-             * @since v2.0.0
-             * @returns nothing
-             */
-            end() {
-                t.emit("end")
-            },
-            /** Get Record's stats
-             * @since v2.0.0
-             */
-            stats: statSync(t.find(tag)),
-            /** Make an alias of a Record
-             * @param {string} dirPath The path to create symlink in
-             * @since v2.0.0
-             */
-            createSymlink(dirPath) {
-                t.emit("symlink", tag, dirPath)
-                symlinkSync(path.join(t.dirPath, `${this.tag}.${t.ext}`), dirPath)
-                return t.get(tag)
-            },
-            /** Search Record content
-             * @since v2.1.0
-             * @param {string} query Search query
-             * @param {string} splitBy String to split the Record's content by. For example, "\n" for lines or " " for spaces.
-             */
-            search(query, splitBy) {
-                let results = []
-                if (!query) return null
-                const lines = stringify(this.content).split(splitBy || " ")
-                for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].search(query) !== -1) {
-                        results.push(lines[i])
-                    }
-                }
-                return {
-                    record: t.get(tag),
-                    query,
-                    results,
-                    splitBy
-                }
-            },
-            /** Search keys in a Record (JSON only)
-             * @since v2.0.0
-             */
+            /** Search the Record's content
+             * @param {string} query Query to search for
+             * @returns {string} Result
+             * */
             searchKeys(query) {
                 let results = {}
                 const obj = t.get(tag).content
@@ -258,169 +172,325 @@ const dubnium = class extends require("events") {
                         }
                     }
                 }
-                return {
-                    record: t.get(tag),
-                    query,
-                    results
-                }
+                return results
             },
-            /** Convert the Record's content to string
-             * @since v2.0.0
-             */
-            toString() {
-                return stringify(this.content)
+            /** Truncate the Record
+             * @param {number} length Length to truncate to
+             * @returns Record
+             * */
+            truncate(length) {
+                truncateSync(file, length)
+                _this.emit('truncate', this.tag, length)
+                return this
             },
-            /** Convert the Record's content to an object, if possible
-             * @since v2.0.0
-             */
-            toJSON() {
-                return new Object(this.content)
+            /** Append to the Record
+             * @param {string} content Content to append
+             * @returns Record
+             * */
+            append(content) {
+               appendFileSync(file, content)
+                _this.emit('append', this.tag, content)
+               return this
             },
-            /** Run any function from `fs`. If you wish to get the return value, access the `returns` property
-             * @param {string} Function The function (name) to run
-             * @param args The function arguments
-             */
-            other(Function, ...args) {
-                const r = t.get(tag)
-                if (!require('fs')[Function]) {
-                    throw new TypeError(`fs.${Function} is not a function`)
-                }
-                const arr = []
-                arr.push(t.find(tag))
-                args.forEach(e => {
-                    arr.push(e)
-                })
-                t.emit("other", Function, args)
-                const f = require('fs')[Function].apply(null, arr)
-                r.returns = f
-                return r
+            /** Prepend to the Record
+             * @param {string} content Content to prepend
+             * @returns Record
+             * */
+            prepend(content) {
+                const _res = `${content}${this.content}` 
+                this.edit(_res)
+                _this.emit('prepend', this.tag, content)
+                return this
             },
-
-            /** Run a custom callback function.
-             * @since v2.2.2
-             */
-            custom(callback = (record = this, recordPath = "") => {}) {
-                if (typeof callback != 'function') return t.get(tag)
-                t.emit("custom", callback)
-                callback(this, this.path)
-                return t.get(tag)
+            /** Sync the Record with another Record
+             * @param {string} _tag Tag to sync with
+             * @returns {object} Original and source Records
+             * */
+            syncWith(_tag) {
+            writeFileSync(file, _this.get(_tag).content)
+            _this.emit('sync', _tag)
+            return {
+            original: this,
+            source: _this.get(_tag)
             }
+            },
+                /** Use an extension at the Record level
+             * @param {string} name Set a custom name for the extension
+             * @param source Source of the extension
+             * @param permissions Permissions for the extension
+             * @returns database
+             * */
+            extend(name, source=()=>{}, permissions=module.exports.extensionPermissions){
+                if(this[name]) throw new DubniumError(`Cannot overwrite "${name}"`)
+                this[name] = (...args) => {
+                return source(permissions.DATABASE ? _this : null, permissions.RECORD ? this : null, ...args)
+                }
+                return this
+                },
+                /** Create a symlink to the Record
+                 * @param {string} target Target of the symlink
+                 * @returns Record
+                 * */
+                symlink(target) {
+                    symlinkSync(target, file)
+                    _this.emit('symlink', this.tag, target)
+                    return this
+                },
+                /** Get the Record's content as a string
+                 * @returns {string} Content
+                 * */
+                toString() {
+                    return stringify(this.content)
+                },
+                /** Get the Record's content as a JSON object, if possible
+                 * @returns {object} Content
+                 * */
+                toJSON() {
+                    return new Object(this.content)
+                },
+                /** Exit the Record editor API
+             * @returns database
+             */
+                exit(){
+                return _this
+                },
+                end(){},
+                /** Run a custom `fs` function
+                 * @param {string} func Function to run
+                 * @param {any} args Arguments to pass to the function
+                 */
+                fs(func, ...args){
+                    _this.emit('fs', func, this.tag, ...args)
+                    return require('fs')[func](this.config.dir, ...args)
+                },
+                /**
+                 * Clone the Record
+                 * @param {string} target Target directory to clone to
+                 * @returns 
+                 */
+                clone(target){
+                    writeFileSync(`${target}/${this.tag}.${_this.config.ext}`, this.content)
+                    _this.emit('clone', this.tag, target)
+                    return {
+                        original: this,
+                        clone:new Dubnium(target, _this.config.ext).get(this.tag)
+                    }
+                },
+                /** Empty the Record
+                 * @returns Record
+                 */
+                empty(){
+                    writeFileSync(file, '')
+                    _this.emit('empty', this.tag)
+                    return this
+                },
+                /** Check if the Record is empty */
+                isEmpty(){
+                return stringify(this.content).length == 0
+                },
+                /** Set an alias for a Record level function
+                 * @param {string} alias Alias to set
+                 * @param {string} func Function to alias
+                 * @returns Record
+                 */
+                alias(alias, func){
+                    if(!this[func]) throw new DubniumError(`Function "${func}" does not exist`)
+                    if(this[alias]) throw new DubniumError(`Cannot overwrite "${alias}"`)
+                    this[alias] = (...args) => {
+                    return this[func](...args)
+                    }
+                    return this
+                    },
+                    /** Beautify a JSON Record
+                     * @param {function} replacer Replacer function
+                     * @param {number} space Space to uses, defaults to 2
+                     */
+                    beautify(replacer, space){
+                    if(typeof this.content == 'object') writeFileSync(file, JSON.stringify(this.content, replacer, space || 2))
+                    _this.emit('beautify', this.tag, replacer, space)
+                    return this
+                    }
         }
     }
 
-    /** Don't allow any functions to be called after.
-     * @since v2.0.0
-     */
-    end() {
-        this.emit("end")
+           /** Run a custom `fs` function
+                 * @param {string} func Function to run
+                 * @param {any} args Arguments to pass to the function
+                 */
+    fs(func, ...args){
+    this.emit('fs', func, null, ...args)
+    return require('fs')[func](this.config.dir, ...args)
     }
 
-    /** Run a custom callback function.
-     * @since v2.2.2
+    end(){}
+
+    /** Run a bash command in the directory
+     * @param {string} command Command to run
+     * @param {function} callback Callback to pass to `child_process.exec`
+     * @param {object} opts Options to pass to `child_process.exec`
      */
-    custom(callback = (Class = this, dirPath = "") => {}) {
-        this.emit("custom", callback)
-        if (typeof callback != 'function') return t.get(tag)
-        callback(this, this.dirPath)
-        return this
+    exec(command, callback=(error, stdout=Buffer.from(), stderr=Buffer.from()) => {}, opts){
+    this.emit('exec', command, callback)
+    let _opts = opts || {}
+    _opts.cwd = fullPath(this.config.dir)
+    require('child_process').exec(command, _opts, callback)
+    return this
+    }
+
+/** Get a Record from its value
+ * @param {string} value Value to search for
+ * @returns Record[]
+ */
+    getFromValue(value){
+        const records = this.getAll()
+        const results = []
+        for (const record of records) {
+            if (record.content === value) results.push(record)
+        }
+        return results
+    }
+
+    /** Get a Record from a key/value pair
+     * @param {string} key Key to search for
+     * @param {string} value Value to search for
+     * @returns Record[]
+     * */
+    getFromKeyValue(key, value){
+        const records = this.getAll()
+        const results = []
+        for (const record of records) {
+            if (record.content[key] === value) results.push(record)
+        }
+        return results
     }
 
     /** Get all Records
-     * @param {number} returnType 1: Return as JSON. 2: Return as Array
-     */
-    getAll(returnType) {
-        let array_of_filenames = []
-        if(!returnType) returnType = 2
-        for (const f of readdirSync(this.dirPath)) {
-            if (f != '.DS_Store') {  
-                if (path.extname(f).toLowerCase().replace(".", '') == this.ext) {
-                    array_of_filenames.push(f)
-                }
+     * @returns Record[]
+     * */
+    getAll(){
+        const files = readdirSync(this.config.dir)
+        const records = []
+        for (const file of files) {
+            if (file.endsWith(this.config.ext)) {
+                records.push(this.get(file.replace(`.${this.config.ext}`, '')))
             }
         }
-
-        let obj_of_data
-
-        if (returnType == 1) {
-            obj_of_data = {}
-
-            array_of_filenames.forEach(filename => {
-                obj_of_data[filename.replace('.' + this.ext, '')] = this.get(path.basename(filename).replace(path.extname(filename), "")).content
-            })
-        } else if (returnType == 2) {
-            obj_of_data = []
-            array_of_filenames.forEach(f => {
-                obj_of_data.push({
-                    tag: path.basename(f).replace(path.extname(f), ""),
-                    content: this.get(path.basename(f).replace(path.extname(f), "")).content
-                })
-            })
-        }
-
-        return obj_of_data
+        return records
     }
 
-
-    /** Get all Records from a key & value (JSON only)
-     * @param {string} key JSON Key
-     * @param value The key's value
-     * @param {string} returnType 1: Return as JSON. 2: Return as Array
-     */
-    getFromValue(key, value, returnType) {
-        if(!returnType) returnType = 2
-        if (this.ext != 'json') return this
-        let data = returnType == 1 ? {} : []
-        this.getAll(2).forEach(d => {
-            if (d.content[key] == value) {
-                returnType == 1 ? data[d.tag] = this.get(d.tag) : data.push(this.get(d.tag))
-            }
-
+    /** Filter Records by tag
+     * @param {string} query Tag to search for
+     * @returns Record[]
+     * */
+    filter(query){
+        const results = []
+      this.getAll().forEach(record => {
+            if (record.tag.search(query)) results.push(record)
         })
-        return data
+        return results
+    }
+    
+    /** Search Records by content
+     * @param {string} query Query to search for
+     * @returns Record[]
+     * */
+    search(query){
+        const results = []
+        this.getAll().forEach(record => {
+            if (stringify(record.content).includes(query)) results.push(record)
+        })
+        return results
     }
 
-    /** Search Tags
-     * @param {string} term Search query
-     * @param {string} returnType 1: Return as JSON. 2: Return as Array
-     */
-    searchTags(term, returnType) {
-        const list = []
-        if(!returnType) returnType = 2
-        for (const f of readdirSync(this.dirPath)) {
-            if (f != '.DS_Store') {
-                if (path.extname(f).toLowerCase().replace(".", '') == this.ext) {
-                    list.push(f.replace(path.extname(f), ''))
-                }
-            }
-        }
-
-        const r = searchArray(list, term)
-        let res = []
-        if (returnType && returnType == 1) {
-            res = {}
-            r.forEach(f => {
-                res[f] = this.get(f)
-            })
-        } else {
-            res = []
-            r.forEach(f => {
-                res.push(this.get(f))
-            })
-        }
-        return {
-            query: term,
-            results: res
-        }
+    /** Create a Record
+     * @param {string} tag Tag to create
+     * @param {any} content Content to write
+     * @param {object} options Options to pass to `fs.writeFileSync`
+     * @returns Record
+     * */
+    create(tag, content, options) {
+    this.emit('create', tag, content)
+    if(this.has(tag) && !options.force) console.warn(`${this.locate(tag)} already exists`)
+    writeFileSync(this.locate(tag), stringify(content), options)
+    return this.get(tag)
     }
 
-    /** Delete Records older than a specified time
-     * @param {object} options Time options
-     * @param {number} options.ms Milliseconds
-     * @param {number} options.seconds Seconds
-     * @param {number} options.minutes Minutes
-     * @param {number} options.hours Hours
-     * @param {number} options.days Days
+    /** Create a Record from a file
+     * @param {string} tag Tag to create
+     * @param {string} file File to read from
+     * @param {object} options Options to pass to `fs.writeFileSync`
+     * @returns Record
+     * */
+    createFromFile(tag, file, options) {
+        this.emit('create', tag, file)
+        if(this.has(tag) && !options.force) console.warn(`${this.locate(tag)} already exists`)
+        if(!existsSync(fullPath(file), 'utf8')) throw new DubniumError(`File ${fullPath(file)} does not exist`)
+        if(!readFileSync(fullPath(file), 'utf8').length) console.warn(`File ${fullPath(file)} is empty`)
+        writeFileSync(this.locate(tag), readFileSync(fullPath(file), 'utf8'), options)
+        return this.get(tag)
+    }
+
+    /** Delete a Record
+     * @param {string} tag Tag to delete
+     * @returns database
      */
+    delete(tag) {
+        this.emit('delete', tag)
+        const file = this.locate(tag)
+        this.#check(tag)
+        rmSync(file)
+        return this
+    }
+
+    /** Edit a Record. This will overwrite the entire file
+     * @param {string} tag Tag to edit
+     * @param {any} content Content to write
+     * @returns Record
+     * */
+    edit(tag, content) {
+        this.emit('edit', tag, readFileSync(this.locate(tag), 'utf8'), content)
+        const file = this.locate(tag)
+        this.#check()
+        writeFileSync(file, stringify(content))
+        return this.get(tag)
+    }
+
+    /** Set a Record's tag
+     * @param {string} tag Tag to edit
+     * @param {string} newTag New tag to set
+     * @returns Record
+     */
+    setTag(tag, newTag) {
+        this.emit('retagged', tag, newTag)
+        const file = this.locate(tag)
+        this.#check()
+        renameSync(file, this.locate(newTag))
+        return this.get(newTag)
+    }
+    
+    /** Wipe the database
+     * @returns database
+     */
+    wipe(){
+        this.emit('wipe', this.config.dir)
+        walkDir(this.config.dir, (file) => {
+            if (file.endsWith(this.config.ext)) rmSync(file)
+        })
+        return this
+    }
+
+    /** Delete the database
+     * @returns database
+     * */
+    close(){
+    rmSync(`${this.config.dir}`, {recursive: true})
+    this.emit('close', this.config.dir)
+    return this
+    }
+
+    /** Delete old Records
+     * @returns database
+     * */
     deleteOld(options = {
         ms: 0,
         seconds: 0,
@@ -452,10 +522,10 @@ const dubnium = class extends require("events") {
         }
         return this
     }
-    /** Deletes Records larger than the specified size
-     * @param {object} options Options
-     * @since v2.2.0
-     */
+
+    /** Delete large Records
+     * @returns database
+     * */
     deleteLarge(options = {
         bytes: 0,
         kilobytes: 0,
@@ -477,97 +547,265 @@ const dubnium = class extends require("events") {
         }
         return this
     }
-    /** Delete all Records */
-    wipe() {
-        if (!existsSync(this.dirPath)) return this
-        this.emit('wipe', this.dirPath)
-        readdirSync(this.dirPath).forEach(file => {
-            if (file.toLowerCase() == 'dubniumconfig.json') return
-            rmSync(`${this.dirPath}/${file}`)
-        })
-        return this
-    }
-    /** Delete all Records & the directory */
-    close() {
-        if (!existsSync(this.dirPath)) return this
-        this.emit('close', this.dirPath)
-        rmSync(this.dirPath, {
-            recursive: true
-        })
-        return this
-    }
-    /** Make the directory */
-    dir() {
-        if (!existsSync(this.dirPath)) {
-            this.emit('dir', this.dirPath)
-            mkdirSync(this.dirPath)
-        }
-        return this
-    }
 
-/** Run a bash command
- * @param {string} command The command (include arguments)
- */
-bash(command, callback=(err="",stdout="")=>{}){
-    require("child_process").exec(command, { cwd:this.dirPath }, callback ? callback : () => {})
+                /** Use an extension at the database level
+             * @param {string} name Set a custom name for the extension
+             * @param source Source of the extension
+             * @param permissions Permissions for the extension
+             * @returns database
+             * */
+    extend(name, source=()=>{}, permissions=new module.exports.extensionPermissions()){
+        if(this[name]) throw new DubniumError(`Cannot overwrite "${name}"`)
+        this[name] = (...args) => {
+    return source(permissions.DATABASE ? this : null, null, ...args)
+    }
     return this
-}
+    }
 
-plugins = require("./plugins")
-/** Use a plugin
-* @since v2.3.1
-*/
-usePlugin(plugin){
-    return { returns: require("./plugins")[plugin](this, null), dubnium:this }
-}
+                    /** Set an alias for a database level function
+                 * @param {string} alias Alias to set
+                 * @param {string} func Function to alias
+                 * @returns Record
+                 */
+    alias(alias, func){
+    if(!this[func]) throw new DubniumError(`Function "${func}" does not exist`)
+    if(this[alias]) throw new DubniumError(`Cannot overwrite "${alias}"`)
+    this[alias] = (...args) => {
+    return this[func](...args)
+    }
+    return this
+    }
 
-/** iterate dir
- * @param {function} callback Callback
- */
-iterate(callback){
-walkDir(this.dirPath, callback)
-}
+    /** Create a directory for the database
+     * @returns database
+     * */
+    dir(){
+    mkdirSync(this.config.dir)
+    this.emit('dir', this.config.dir)
+    return this
+    }
 
-}
+    /** Iterate the database
+     * @param callback Callback to run
+     */
+    iterate(callback=(record=this.get())=>{}){
+        this.getAll().forEach(record => {
+            callback(record)
+        })
+        return this
+    }
 
-module.exports = dubnium
-module.exports.Dubnium = dubnium
+    /** Save the config file
+     * @returns database
+     */
+    saveConfig(){
+        writeFileSync(`${this.config.dir}/.dubnium/config.json`, JSON.stringify(this.config, null, 2))
+        return this
+    }
 
+    versions = {
+    database:this,
+    /** Locate a version
+     * @param {string} tag Tag to locate
+     */
+    locate(tag,opts={date, index}){
+       if(date) return `${this.database.config.dir}/.dubnium/versions/${tag}/${opts.date}.${this.database.config.ext}`
+       if(index) return `${this.database.config.dir}/.dubnium/versions/${tag}/${readdirSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)[opts.index]}`
+       return null
+    },
+    /** Read a **file** version from its ISO date
+     * @param {string} tag Tag to read from
+     * @param {string} date Date to read from
+     */
+    readFromDate(tag, date){
+        if(!existsSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)) throw new DubniumError(`Record ${tag} does not exist`)
+        return readFileSync(this.locate(tag, date), 'utf8')
+    },
+    /** Read a **file** version from its index
+     * @param {string} tag Tag to read from
+     * @param {number} index Index to read from
+     * */
+    readFromIndex(tag, index){
+        if(!existsSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)) throw new DubniumError(`Record ${tag} does not exist`)
+        const files = readdirSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)
+        if(!files[index]) console.warn(`Version at index ${index} does not exist in ${tag}`)
+        return readFileSync(this.locate(tag, index), 'utf8')
+    },
+    /** Set the number of stored versions
+     * @param {number} max Maximum number of versions to store. Default: 100
+     */
+    setLength(max){
+            if(!max) max = 100
+            for ( const v in this.database.versions.temp ){
+                if(this.database.versions?.temp[v]?.length > max) this.database.versions.temp[v].length = max
+            }
+            readdirSync(`${this.database.config.dir}/.dubnium/versions`).forEach(tag => {
+                const files = readdirSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)
+                if(files.length > max) {
+                    for(let i = 0; i < files.length - max; i++){
+                        rmSync(`${this.database.config.dir}/.dubnium/versions/${tag}/${files[i]}`)
+                    }
+                }
+            })
+            return this
+        },
+        /** Delete a **file** version from its ISO date
+         * @param {string} tag Tag to delete from
+         * @param {string} date Date to delete
+         * */
+        deleteFromDate(tag, date){
+            if(!existsSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)) throw new DubniumError(`Record ${tag} does not exist`)
+            if(!date) throw new DubniumError(`Date not specified`)
+            if(!existsSync(this.locate(tag, date))) throw new DubniumError(`Version ${date} does not exist in ${tag}`)
+            rmSync(this.locate(tag, date))
+            return this
+        },
+        /** Delete a **file** version from its index
+         * @param {string} tag Tag to delete from
+         * @param {number} index Index to delete
+         * */
+        deleteFromIndex(tag, index){
+            if(!existsSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)) throw new DubniumError(`Record ${tag} does not exist`)
+            const files = readdirSync(`${this.database.config.dir}/.dubnium/versions/${tag}`)
+            if(!files[index]) console.warn(`Version at index ${index} does not exist in ${tag}`)
+            rmSync(this.locate(tag, index))
+            return this
+        },
+    /** Temporary versions */
+    temp:{}
+    }
 
-/** Invoke CLI programmatically
- * @since 2.0.0
- */
-module.exports.cli = () => {
-    require("./cli")
+    middleware = {
+        database:this,
+        /** Create a record from a request
+         * @param {string} tag Tag to create
+         * */
+        create(tag={from:"", key:""}, content={from:"", key:""}){
+            return (req, res, next) => {
+                if(typeof tag != 'string' && !req[tag.from]) throw new DubniumError(`${tag.from} not found in request`)
+                if(typeof content != 'string' && !req[content.from]) throw new DubniumError(`${content.from} not found in request`)
+                const _tag = typeof tag == 'string' ? tag : req[tag.from][tag.key] ?? req[tag.from]
+                const _content = typeof content == 'string' ? content : req[content.from][content.key] ?? req[content.from]
+                this.database.create(_tag, _content)
+                next()
+            }
+        },
+        /** Get a record from a request */
+        get(tag={from:"", key:""}){
+            return (req, res, next) => {
+                if(!req[tag.from][tag.key]) throw new DubniumError(`Tag not found in ${tag.from} at ${tag.key}`)
+                const _tag = typeof tag == 'string' ? tag : req[tag.from][tag.key] ?? req[tag.from]
+                req.record = this.database.get(_tag)
+                next()
+            }
+        },
+        /** Inject database into request object
+         * @param {string} name Name of the database object. Default: `db`
+         */
+        db(name){
+           return (req, res, next) => {
+                req[name || 'db'] = this.database
+                next()
+              }
+        },
+        /** Delete a record from a request */
+        delete(tag={from:"", key:""}){
+            return (req, res, next) => {
+                if(!req[tag.from][tag.key]) throw new DubniumError(`Tag not found in ${tag.from} at ${tag.key}`)
+                const _tag = typeof tag == 'string' ? tag : req[tag.from][tag.key] ?? req[tag.from]
+                this.database.delete(_tag)
+                next()
+            }
+        },
+        /** Edit a record from a request */
+        edit(tag={from:"", key:""}, content={from:"", key:""}){
+            return (req, res, next) => {
+                if(typeof tag != 'string' && !req[tag.from]) throw new DubniumError(`${tag.from} not found in request`)
+                if(typeof content != 'string' && !req[content.from]) throw new DubniumError(`${content.from} not found in request`)
+                const _tag = typeof tag == 'string' ? tag : req[tag.from][tag.key] ?? req[tag.from]
+                const _content = typeof content == 'string' ? content : req[content.from][content.key] ?? req[content.from]
+                this.database.edit(_tag, _content)
+                next()
+            }
+        },
+        /** Run a function from a request */
+        other(func, ...args){
+            return (req, res, next) => {
+                const result = this.database[func](...args)
+                req.db.function = func
+                req.db[func] = this.database[func]
+                req.db.args = args
+                req.db.result = result
+                next()
+            }    
+        }
+    }
+
+    /** Stop recording versions */
+    stopVersioning(options = { temp:false, file:false }){
+        this.emit('stop_versioning', options)
+        if(options.temp) this.versions.temp = {}
+        if(options.file) this.#watcher.close()
+        return this
+    }
+
+    /** Start recording versions */
+    startVersioning(options = { temp:true, file:true, max:100 }){
+        this.emit('start_versioning', options)
+        this.#watcher = watch(this.config.dir, (event, filename) => {
+            const directory = `${this.config.dir}/.dubnium/versions`
+            this.#check()
+            const nm = path.basename(filename).replace(`.${this.config.ext}`, '')
+            if(options.max > 0) {
+                if(this.versions.temp[nm]?.length > options.max) this.versions.temp[nm].shift()
+                if(readdirSync(`${this.config.dir}/.dubnium/versions/${nm}`).length > options.max){
+                readdir(directory , (e, f) => {
+                    if (e) throw e
+                    readdir(`${directory}/${nm}`, (err, files) => {
+                    if (err) throw err
+                     files.sort((a, b) => {
+                      return statSync(path.join(directory, nm, a)).birthtime.getTime() - statSync(path.join(directory, nm, b)).birthtime.getTime()
+                    })
+                    const oldestFile = fullPath(path.join(directory, nm, files[0]))
+                    rmSync(oldestFile)
+                  })
+                })
+                }
+            }
+            this.emit(event, nm)
+            if(event != 'change') return
+            if(!this.has(nm)) return
+            if(!this.versions.temp[nm]) this.versions.temp[nm] = []
+            if(options.temp) this.versions.temp[nm].push({ date:new Date(), content:this.get(nm).content })
+            if(!existsSync(`${this.config.dir}/.dubnium/versions/${nm}`) && options.file) mkdirSync(`${this.config.dir}/.dubnium/versions/${nm}`)
+            if(options.file) writeFileSync(`${this.config.dir}/.dubnium/versions/${nm}/${new Date().toISOString()}.${this.config.ext}`, stringify(readFileSync(`${this.config.dir}/${filename}`, 'utf8')))
+        })
+        return this
+    }
 }
 
 /** Create a Record */
-module.exports.Record = (options = {
-    dir: "./",
-    ext: "json",
-    tag: "tag",
-    content
-}) => {
-    return new dubnium(options.dir, options.ext).create(options.tag, stringify(options.content))
+const Record = (dir, tag, content, ext) => {
+return new Dubnium(dir, ext || "json").create(tag, content)
 }
 
-module.exports.Template = class {
-
+const Template = class {
     template = {}
-
-    /** Set up a JSON template
-     * @param {object} template The template
-     * @since 2.0.0
-     */
-    constructor(template) {
+    #type = 0
+    constructor(template){
         this.template = template
+        this.#type = typeof template == 'string' ? 1 : 0
     }
 
-    /** Use template
-     * @param values The values, in order from the template.
-     * @since v2.0.1
-     */
-    use(...values) {
+    /** Use the template */
+    use(...values){
+    if (this.#type == 0){
+        let r = this.template
+        values.forEach((val, index) => {
+        r = r.split(`{${index}}`).join(val)
+        })
+        return r
+    }else{
         let n = 0
         const r = this.template
         values.forEach(val => {
@@ -580,15 +818,20 @@ module.exports.Template = class {
         return r
     }
 }
-
-/** Manage your plugins */
-module.exports.PluginManager = { 
-    /** Load plugins config from a file
-     * @param {string} file Path to file.
-     */
-    loadFromFile(file) {
-    writeFileSync(`${__dirname}/plugins.js`, readFileSync(file,'utf8'))
-    },
-    /** Get a list of active plugins */
-    activePlugins:require("./plugins")
 }
+
+class extensionPermissions {
+RECORD = false
+DATABASE = false
+
+constructor(record=false, database=false){
+    this.RECORD = record
+    this.DATABASE = database
+}
+}
+
+module.exports = Dubnium
+module.exports.Dubnium = Dubnium
+module.exports.Template = Template
+module.exports.extensionPermissions = extensionPermissions
+module.exports.Record = Record
