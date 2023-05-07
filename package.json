@@ -1,6 +1,6 @@
 {
   "name": "dubnium",
-  "version": "2.3.1",
+  "version": "3.0.0",
   "repository": "https://github.com/coolstone-tech/dubnium",
   "funding": "https://www.patreon.com/coolstone",
   "homepage": "https://db.coolstone.dev",
@@ -16,7 +16,8 @@
     "database",
     "backend",
     "cli",
-    "elementscript"
+    "elementscript",
+    "middleware"
   ],
   "author": "CoolStone Tech",
   "license": "MIT",
