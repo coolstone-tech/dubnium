@@ -55,14 +55,14 @@ class Dubnium extends require('events') {
         if(!dir) throw new DubniumError('No directory specified')
         if(!ext) console.warn('No extension specified, using "json"')
         this.emit('start', dir, ext, options)
-        this.config = options
+        this.config = options ? options : this.config
         this.config.dir = dir.replace('~', homedir())
         this.config.ext = ext || 'json'
         if (!existsSync(dir)) mkdirSync(dir)
         if (!existsSync(`${dir}/.dubnium`)) mkdirSync(`${dir}/.dubnium`)
-        if (!existsSync(`${dir}/.dubnium/config.json`) && !preserveConfig) writeFileSync(`${dir}/.dubnium/config.json`, stringify(this.config))
-        this.name = options.name || path.basename(dir)
-        if(!options.versioning.temp && !options.versioning.file) return
+        if (!existsSync(`${dir}/.dubnium/config.json`) && !options?.preserveConfig) writeFileSync(`${dir}/.dubnium/config.json`, stringify(this.config))
+        this.name = options?.name || path.basename(dir)
+        if(!options?.versioning?.temp && !options?.versioning?.file) return
         this.startVersioning(this.config.versioning)
     }
 
