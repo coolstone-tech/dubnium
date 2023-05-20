@@ -46,6 +46,9 @@ db.get('old_tag').setTag('new_tag')
 ## Why use Dubnium?
 Read about it [here](https://db.coolstone.dev/key-features)
 
+## Requirements
+- Node.js v14.0.0 or higher. Latest version is recommended.
+
 ## Other info
 Get more in-depth help from our [docs](https://db.coolstone.dev/), [Discord](https://discord.gg/nzTmfZ8), or ask a question on [GitHub](https://github.com/coolstone-tech/dubnium/discussions)
 
