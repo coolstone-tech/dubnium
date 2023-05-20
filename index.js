@@ -35,13 +35,14 @@ const DubniumError = class extends Error {
 
 class Dubnium extends require('events') {
     config = {
-        dir: '',
+        dir: `${__dirname}/db`,
         ext: 'json',
         force: false,
         preserveConfig: false,
+        useConfigFile: false,
         versioning: {
-            temp: true,
-            file: true,
+            temp: false,
+            file: false,
             max: 10,
         }
         }
@@ -52,6 +53,8 @@ class Dubnium extends require('events') {
 
     constructor(dir = "", ext = "", options = this.config) {
         super()
+        if(!options) options = this.config
+        if(options.useConfigFile) options = JSON.parse(readFileSync(`${dir}/.dubnium/config.json`, 'utf8'))
         if(!dir) throw new DubniumError('No directory specified')
         if(!ext) console.warn('No extension specified, using "json"')
         this.emit('start', dir, ext, options)
@@ -60,9 +63,9 @@ class Dubnium extends require('events') {
         this.config.ext = ext || 'json'
         if (!existsSync(dir)) mkdirSync(dir)
         if (!existsSync(`${dir}/.dubnium`)) mkdirSync(`${dir}/.dubnium`)
-        if (!existsSync(`${dir}/.dubnium/config.json`) && !options?.preserveConfig) writeFileSync(`${dir}/.dubnium/config.json`, stringify(this.config))
-        this.name = options?.name || path.basename(dir)
-        if(!options?.versioning?.temp && !options?.versioning?.file) return
+        if(options.preserveConfig != true) writeFileSync(`${dir}/.dubnium/config.json`, stringify(options))
+        this.name = options.name || path.basename(dir)
+        if(!options.versioning.temp && !options.versioning.file) return
         this.startVersioning(this.config.versioning)
     }
 
@@ -87,7 +90,15 @@ class Dubnium extends require('events') {
     #check(tag) {
         if (!existsSync(`${this.config.dir}/.dubnium`)) mkdirSync(`${this.config.dir}/.dubnium`)
         if(!existsSync(`${this.config.dir}/.dubnium/versions/`)) mkdirSync(`${this.config.dir}/.dubnium/versions`)
-        if (tag && !this.has(this.locate(tag))) throw new DubniumError(`File ${this.locate(tag)} does not exist`)
+        if (tag && !this.has(tag)) throw new DubniumError(`File ${this.locate(tag)} does not exist`)
+    }
+
+    /** Read a Record
+     * @param {string} tag Tag of the Record to read
+     */
+    read(tag){
+    if(typeof tag == 'number') tag = this.getAll()[tag]?.tag
+    return this.get(tag).content
     }
 
     /**
@@ -96,6 +107,7 @@ class Dubnium extends require('events') {
      * @returns Record
      */
     get(tag) {
+        if(typeof tag == 'number') tag = this.getAll()[tag]?.tag
         const file = this.locate(tag)
         const _this = this
         if (!existsSync(file)) return null
@@ -223,7 +235,13 @@ class Dubnium extends require('events') {
             extend(name, source=()=>{}, permissions=module.exports.extensionPermissions){
                 if(this[name]) throw new DubniumError(`Cannot overwrite "${name}"`)
                 this[name] = (...args) => {
-                return source(permissions.DATABASE ? _this : null, permissions.RECORD ? this : null, ...args)
+                const _ = this
+                const __ = _this
+                permissions.FILTER_LIST.forEach(method => {
+                if(_[method]) _[method] = null
+                if(__[method]) __[method] = null
+                })
+                return source(permissions.DATABASE ? _this : null, permissions.RECORD ? _ : null, ...args)
                 }
                 return this
                 },
@@ -409,25 +427,12 @@ class Dubnium extends require('events') {
      * @returns Record
      * */
     create(tag, content, options) {
-    this.emit('create', tag, content)
-    if(this.has(tag) && !options.force) console.warn(`${this.locate(tag)} already exists`)
+    if(!options) options = {}
+    if(existsSync(String(content)) && !options.notFromFile) content = readFileSync(content, 'utf8')
+    if(this.has(tag) && !this.config.force) console.warn(`${this.locate(tag)} already exists`)
     writeFileSync(this.locate(tag), stringify(content), options)
+    this.emit('create', tag, content)
     return this.get(tag)
-    }
-
-    /** Create a Record from a file
-     * @param {string} tag Tag to create
-     * @param {string} file File to read from
-     * @param {object} options Options to pass to `fs.writeFileSync`
-     * @returns Record
-     * */
-    createFromFile(tag, file, options) {
-        this.emit('create', tag, file)
-        if(this.has(tag) && !options.force) console.warn(`${this.locate(tag)} already exists`)
-        if(!existsSync(fullPath(file), 'utf8')) throw new DubniumError(`File ${fullPath(file)} does not exist`)
-        if(!readFileSync(fullPath(file), 'utf8').length) console.warn(`File ${fullPath(file)} is empty`)
-        writeFileSync(this.locate(tag), readFileSync(fullPath(file), 'utf8'), options)
-        return this.get(tag)
     }
 
     /** Delete a Record
@@ -435,6 +440,8 @@ class Dubnium extends require('events') {
      * @returns database
      */
     delete(tag) {
+        if(typeof tag == 'number') tag = this.getAll()[tag]?.tag
+        if(!tag) throw new DubniumError(`Tag not specified`)
         this.emit('delete', tag)
         const file = this.locate(tag)
         this.#check(tag)
@@ -448,6 +455,7 @@ class Dubnium extends require('events') {
      * @returns Record
      * */
     edit(tag, content) {
+        if(typeof tag == 'number') tag = this.getAll()[tag]?.tag
         this.emit('edit', tag, readFileSync(this.locate(tag), 'utf8'), content)
         const file = this.locate(tag)
         this.#check()
@@ -461,6 +469,7 @@ class Dubnium extends require('events') {
      * @returns Record
      */
     setTag(tag, newTag) {
+        if(typeof tag == 'number') tag = this.getAll()[tag]?.tag
         this.emit('retagged', tag, newTag)
         const file = this.locate(tag)
         this.#check()
@@ -557,7 +566,11 @@ class Dubnium extends require('events') {
     extend(name, source=()=>{}, permissions=new module.exports.extensionPermissions()){
         if(this[name]) throw new DubniumError(`Cannot overwrite "${name}"`)
         this[name] = (...args) => {
-    return source(permissions.DATABASE ? this : null, null, ...args)
+            const _ = this
+            permissions.FILTER_LIST.forEach(method => {
+            if(_[method]) _[method] = null
+            })
+    return source(permissions.DATABASE ? _ : null, null, ...args)
     }
     return this
     }
@@ -823,10 +836,12 @@ const Template = class {
 class extensionPermissions {
 RECORD = false
 DATABASE = false
+FILTER_LIST = []
 
-constructor(record=false, database=false){
+constructor(record=false, database=false, filterList=[]){
     this.RECORD = record
     this.DATABASE = database
+    this.FILTER_LIST = filterList
 }
 }
 
