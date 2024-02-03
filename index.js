@@ -22,9 +22,6 @@ const {
 } = require('./functions')
 
 const path = require('path')
-const {
-    homedir
-} = require('os')
 
 const DubniumError = class extends Error {
     constructor(message) {
@@ -33,40 +30,64 @@ const DubniumError = class extends Error {
     }
 }
 
+const _config = {
+    dir: `${__dirname}/db`,
+    ext: 'json',
+    force: false,
+    preserveConfig: false,
+    fromFile: false,
+    versioning: {
+        temp: false,
+        file: false,
+        max: 10,
+    },
+    requireRoot: [
+        'close',
+        'wipe',
+        'deleteOld',
+        'deleteLarge',
+    ],
+    template:null,
+    }
+
+/**
+ * Dubnium is a class that represents a database in the Dubnium package.
+ * It provides methods for managing records within the database. 
+ */
 class Dubnium extends require('events') {
-    config = {
-        dir: `${__dirname}/db`,
-        ext: 'json',
-        force: false,
-        preserveConfig: false,
-        useConfigFile: false,
-        versioning: {
-            temp: false,
-            file: false,
-            max: 10,
-        }
-        }
+    config = _config
 
     #watcher = null
 
-    name = path.basename(this.config.dir)
+    name = ''
 
-    constructor(dir = "", ext = "", options = this.config) {
+    #root = process.geteuid ? process.geteuid() === 0 : false
+
+    directory = ''
+
+    constructor(dir = "", ext = "", options = _config) {
         super()
-        if(!options) options = this.config
-        if(options.useConfigFile) options = JSON.parse(readFileSync(`${dir}/.dubnium/config.json`, 'utf8'))
-        if(!dir) throw new DubniumError('No directory specified')
-        if(!ext) console.warn('No extension specified, using "json"')
-        this.emit('start', dir, ext, options)
-        this.config = options ? options : this.config
-        this.config.dir = dir.replace('~', homedir())
-        this.config.ext = ext || 'json'
-        if (!existsSync(dir)) mkdirSync(dir)
-        if (!existsSync(`${dir}/.dubnium`)) mkdirSync(`${dir}/.dubnium`)
-        if(options.preserveConfig != true) writeFileSync(`${dir}/.dubnium/config.json`, stringify(options))
+        if(!dir) throw new DubniumError(`Directory not specified`)
+        if(!ext) ext = 'json'
+        if (!options) options = this.config
+        if(options.fromFile) options = JSON.parse(readFileSync(`${dir}/.dubnium/config.json`, 'utf8'))
+        if(options.preserveConfig) writeFileSync(`${dir}/.dubnium/config.json`, JSON.stringify(options, null, 2))
+        this.config = options
+        this.config.ext = ext
         this.name = options.name || path.basename(dir)
-        if(!options.versioning.temp && !options.versioning.file) return
-        this.startVersioning(this.config.versioning)
+        if(options?.versioning?.temp) this.versions.temp = {}
+        if(options?.versioning?.file) this.startVersioning(options.versioning)
+        this.config.dir = dir
+        this.directory = dir
+        options.requireRoot?.forEach(method => {
+            if (!this[method]) throw new DubniumError(`Method "${method}" does not exist`);
+            const originalMethod = this[method];
+            this[method] = (...args) => {
+                if (!this.#root) throw new DubniumError(`${method} requires superuser privileges`);
+                return originalMethod.apply(this, args);
+            };
+        });        
+        this.#check()
     }
 
     /**
@@ -75,7 +96,7 @@ class Dubnium extends require('events') {
      * @returns {string} record path
      */
     locate(tag) {
-        return `${this.config.dir}/${tag}.${this.config.ext}`
+        return `${this.directory}/${tag}.${this.config.ext}`
     }
 
     /**
@@ -88,8 +109,8 @@ class Dubnium extends require('events') {
     }
 
     #check(tag) {
-        if (!existsSync(`${this.config.dir}/.dubnium`)) mkdirSync(`${this.config.dir}/.dubnium`)
-        if(!existsSync(`${this.config.dir}/.dubnium/versions/`)) mkdirSync(`${this.config.dir}/.dubnium/versions`)
+        if (!existsSync(`${this.directory}/.dubnium`)) mkdirSync(`${this.directory}/.dubnium`, { recursive: true  })
+        if(!existsSync(`${this.directory}/.dubnium/versions/`) && this.config.versioning?.file) mkdirSync(`${this.directory}/.dubnium/versions`, { recursive: true  })
         if (tag && !this.has(tag)) throw new DubniumError(`File ${this.locate(tag)} does not exist`)
     }
 
@@ -137,7 +158,18 @@ class Dubnium extends require('events') {
                 _this.edit(tag, content)
                 return this
             },
-            /** Save the Record
+            /** Modify a value by key
+             * @param {string} key Key to modify
+             * @param {any} value Value to set
+             */
+            modify(key, value){
+                if(!_this.config.ext == 'json') throw new DubniumError(`Cannot use modify on a non-JSON database`)
+                const obj = t.get(tag).content
+                obj[key] = value
+                _this.edit(tag, obj)
+                return this
+            },
+            /** Overwrite the Record with the content
              * @returns Record
              * */
             save() {
@@ -157,6 +189,7 @@ class Dubnium extends require('events') {
              * @param {string} query Query to search for
              * @param {string} splitBy Split the content by this
              * @returns {string} Result
+             * @deprecated Use `search` instead
              * */
             searchAsArray(query, splitBy){
                 return searchArray(String(this.content).split(splitBy || ' '), query)
@@ -168,11 +201,12 @@ class Dubnium extends require('events') {
             search(query){
             return stringify(this.content).search(query)
             },
-            /** Search the Record's content
+            /** Search keys in the Record's content (JSON only)
              * @param {string} query Query to search for
              * @returns {string} Result
              * */
             searchKeys(query) {
+                if(!_this.config.ext == 'json') throw new DubniumError(`Cannot search keys in non-JSON database`)
                 let results = {}
                 const obj = t.get(tag).content
                 for (let key in obj) {
@@ -222,7 +256,7 @@ class Dubnium extends require('events') {
             writeFileSync(file, _this.get(_tag).content)
             _this.emit('sync', _tag)
             return {
-            original: this,
+            original: _this.get(tag),
             source: _this.get(_tag)
             }
             },
@@ -237,11 +271,11 @@ class Dubnium extends require('events') {
                 this[name] = (...args) => {
                 const _ = this
                 const __ = _this
-                permissions.FILTER_LIST.forEach(method => {
+                permissions.FILTER_LIST?.forEach(method => {
                 if(_[method]) _[method] = null
                 if(__[method]) __[method] = null
                 })
-                return source(permissions.DATABASE ? _this : null, permissions.RECORD ? _ : null, ...args)
+                return source(permissions.DATABASE ? __ : null, permissions.RECORD ? _ : null, ...args)
                 }
                 return this
                 },
@@ -279,7 +313,7 @@ class Dubnium extends require('events') {
                  */
                 fs(func, ...args){
                     _this.emit('fs', func, this.tag, ...args)
-                    return require('fs')[func](this.config.dir, ...args)
+                    return require('fs')[func](this.directory, ...args)
                 },
                 /**
                  * Clone the Record
@@ -303,9 +337,7 @@ class Dubnium extends require('events') {
                     return this
                 },
                 /** Check if the Record is empty */
-                isEmpty(){
-                return stringify(this.content).length == 0
-                },
+                isEmpty:stringify(this.content) == '' ? true : false,
                 /** Set an alias for a Record level function
                  * @param {string} alias Alias to set
                  * @param {string} func Function to alias
@@ -337,7 +369,7 @@ class Dubnium extends require('events') {
                  */
     fs(func, ...args){
     this.emit('fs', func, null, ...args)
-    return require('fs')[func](this.config.dir, ...args)
+    return require('fs')[func](this.directory, ...args)
     }
 
     end(){}
@@ -350,74 +382,82 @@ class Dubnium extends require('events') {
     exec(command, callback=(error, stdout=Buffer.from(), stderr=Buffer.from()) => {}, opts){
     this.emit('exec', command, callback)
     let _opts = opts || {}
-    _opts.cwd = fullPath(this.config.dir)
+    _opts.cwd = fullPath(this.directory)
     require('child_process').exec(command, _opts, callback)
     return this
     }
 
 /** Get a Record from its value
  * @param {string} value Value to search for
- * @returns Record[]
+ * @param {boolean} exact Whether to search for an exact match
+ * @param {number} limit Maximum number of Records to return
+ * @returns Records
  */
-    getFromValue(value){
-        const records = this.getAll()
-        const results = []
-        for (const record of records) {
-            if (record.content === value) results.push(record)
+getFromValue(value, exact, limit) {
+    let allData = this.getAll(false)
+    
+    if (limit > 0) {
+        allData = allData.slice(0, limit)
+    }
+
+    return allData.filter(entry => {
+        const content = entry.content
+        if (exact) {
+            return content === value
+        } else {
+            return typeof content === 'string' && content.includes(value)
         }
-        return results
+    });
+}
+
+    /**
+     * List all Tags
+     * @param {object} options Options to pass to `getAll`
+     * @param {number} options.limit Maximum number of tags to list
+     * @param {function} options.filter Filter to apply to the tags
+     */
+    list(options={limit, filter:r => { return true }}){
+    return this.getAll({ tagOnly:true, limit:options.limit, filter:options.filter })
     }
 
     /** Get a Record from a key/value pair
      * @param {string} key Key to search for
      * @param {string} value Value to search for
-     * @returns Record[]
+     * @param {boolean} exact Whether to search for an exact match
+     * @returns Records
      * */
-    getFromKeyValue(key, value){
-        const records = this.getAll()
-        const results = []
-        for (const record of records) {
-            if (record.content[key] === value) results.push(record)
-        }
-        return results
+    getFromKeyValue(key, value, exact, limit){
+        let r = this.getAll().filter(r => exact ? r.content[key] == value : r.content[key].includes(value))
+        if(limit > 0) r = r.slice(0, limit)
+        return r
     }
 
     /** Get all Records
-     * @returns Record[]
+     * @param {object} options Options to pass to `getAll`
+     * @param {boolean} options.tagOnly Whether to return only tags, and not the entire Record
+     * @param {number} options.limit Maximum number of Records to return
+     * @param {function} options.filter Filter to apply to the Records
+     * @returns Records
      * */
-    getAll(){
-        const files = readdirSync(this.config.dir)
-        const records = []
+    getAll(options={tagOnly:false,limit:0, filter:r => { return true }}){
+        let files = readdirSync(this.directory).filter(f => f.endsWith(this.config.ext))
+        if(options.limit > 0) files = files.slice(0, options.limit)
+        let records = []
         for (const file of files) {
-            if (file.endsWith(this.config.ext)) {
-                records.push(this.get(file.replace(`.${this.config.ext}`, '')))
-            }
+        records.push( options.tagOnly ? file.replace(`.${this.config.ext}`, '') : this.get(file.replace(`.${this.config.ext}`, '')))
         }
+
+        if(options.filter) records = records.filter(filter)
         return records
     }
 
     /** Filter Records by tag
      * @param {string} query Tag to search for
-     * @returns Record[]
+     * @returns Records
+     * @deprecated Use `getFromValue` instead
      * */
     filter(query){
-        const results = []
-      this.getAll().forEach(record => {
-            if (record.tag.search(query)) results.push(record)
-        })
-        return results
-    }
-    
-    /** Search Records by content
-     * @param {string} query Query to search for
-     * @returns Record[]
-     * */
-    search(query){
-        const results = []
-        this.getAll().forEach(record => {
-            if (stringify(record.content).includes(query)) results.push(record)
-        })
-        return results
+        return this.getFromValue(query, false)
     }
 
     /** Create a Record
@@ -428,6 +468,13 @@ class Dubnium extends require('events') {
      * */
     create(tag, content, options) {
     if(!options) options = {}
+    if(this.config.template){
+      if(typeof this.config.template == 'object'){
+            if(Object.keys(this.config.template.template).toString() != Object.keys(content).toString()) throw new DubniumError(`Content does not match template`)
+        }else{
+            throw new DubniumError(`Invalid template type`)
+        }
+    }
     if(existsSync(String(content)) && !options.notFromFile) content = readFileSync(content, 'utf8')
     if(this.has(tag) && !this.config.force) console.warn(`${this.locate(tag)} already exists`)
     writeFileSync(this.locate(tag), stringify(content), options)
@@ -481,9 +528,9 @@ class Dubnium extends require('events') {
      * @returns database
      */
     wipe(){
-        this.emit('wipe', this.config.dir)
-        walkDir(this.config.dir, (file) => {
-            if (file.endsWith(this.config.ext)) rmSync(file)
+        this.emit('wipe', this.directory)
+        walkDir(this.directory, (filePath) => {
+            rmSync(filePath)
         })
         return this
     }
@@ -492,8 +539,8 @@ class Dubnium extends require('events') {
      * @returns database
      * */
     close(){
-    rmSync(`${this.config.dir}`, {recursive: true})
-    this.emit('close', this.config.dir)
+    rmSync(`${this.directory}`, {recursive: true})
+    this.emit('close', this.directory)
     return this
     }
 
@@ -561,13 +608,14 @@ class Dubnium extends require('events') {
              * @param {string} name Set a custom name for the extension
              * @param source Source of the extension
              * @param permissions Permissions for the extension
+             * @param {boolean} force Whether to overwrite an existing extension
              * @returns database
              * */
-    extend(name, source=()=>{}, permissions=new module.exports.extensionPermissions()){
-        if(this[name]) throw new DubniumError(`Cannot overwrite "${name}"`)
+    extend(name, source=()=>{}, permissions=new extensionPermissions(), force=false){
+        if(this[name] && !force) throw new DubniumError(`Cannot overwrite "${name}"`)
         this[name] = (...args) => {
             const _ = this
-            permissions.FILTER_LIST.forEach(method => {
+            permissions.FILTER_LIST?.forEach(method => {
             if(_[method]) _[method] = null
             })
     return source(permissions.DATABASE ? _ : null, null, ...args)
@@ -593,26 +641,24 @@ class Dubnium extends require('events') {
      * @returns database
      * */
     dir(){
-    mkdirSync(this.config.dir)
-    this.emit('dir', this.config.dir)
+    mkdirSync(this.directory)
+    this.emit('dir', this.directory)
     return this
     }
 
     /** Iterate the database
      * @param callback Callback to run
      */
-    iterate(callback=(record=this.get())=>{}){
-        this.getAll().forEach(record => {
-            callback(record)
-        })
+    iterate(callback=(record=this.get())=>{}, filter=(record=this.get())=>true){
+        this.getAll().filter(filter).forEach(r => callback)
         return this
     }
 
-    /** Save the config file
+    /** Overwrite the database's config with a the given config
      * @returns database
      */
     saveConfig(){
-        writeFileSync(`${this.config.dir}/.dubnium/config.json`, JSON.stringify(this.config, null, 2))
+        writeFileSync(`${this.directory}/.dubnium/config.json`, JSON.stringify(this.config, null, 2))
         return this
     }
 
@@ -764,14 +810,15 @@ class Dubnium extends require('events') {
 
     /** Start recording versions */
     startVersioning(options = { temp:true, file:true, max:100 }){
+        return console.log(this.directory)
         this.emit('start_versioning', options)
-        this.#watcher = watch(this.config.dir, (event, filename) => {
-            const directory = `${this.config.dir}/.dubnium/versions`
+        this.#watcher = watch(this.directory, (event, filename) => {
+            const directory = `${this.directory}/.dubnium/versions`
             this.#check()
             const nm = path.basename(filename).replace(`.${this.config.ext}`, '')
             if(options.max > 0) {
                 if(this.versions.temp[nm]?.length > options.max) this.versions.temp[nm].shift()
-                if(readdirSync(`${this.config.dir}/.dubnium/versions/${nm}`).length > options.max){
+                if(readdirSync(`${this.directory}/.dubnium/versions/${nm}`).length > options.max){
                 readdir(directory , (e, f) => {
                     if (e) throw e
                     readdir(`${directory}/${nm}`, (err, files) => {
@@ -790,8 +837,8 @@ class Dubnium extends require('events') {
             if(!this.has(nm)) return
             if(!this.versions.temp[nm]) this.versions.temp[nm] = []
             if(options.temp) this.versions.temp[nm].push({ date:new Date(), content:this.get(nm).content })
-            if(!existsSync(`${this.config.dir}/.dubnium/versions/${nm}`) && options.file) mkdirSync(`${this.config.dir}/.dubnium/versions/${nm}`)
-            if(options.file) writeFileSync(`${this.config.dir}/.dubnium/versions/${nm}/${new Date().toISOString()}.${this.config.ext}`, stringify(readFileSync(`${this.config.dir}/${filename}`, 'utf8')))
+            if(!existsSync(`${this.directory}/.dubnium/versions/${nm}`) && options.file) mkdirSync(`${this.directory}/.dubnium/versions/${nm}`)
+            if(options.file) writeFileSync(`${this.directory}/.dubnium/versions/${nm}/${new Date().toISOString()}.${this.config.ext}`, stringify(readFileSync(`${this.directory}/${filename}`, 'utf8')))
         })
         return this
     }
@@ -802,33 +849,42 @@ const Record = (dir, tag, content, ext) => {
 return new Dubnium(dir, ext || "json").create(tag, content)
 }
 
+const DubniumTemplateError = class extends Error {
+    constructor(message) {
+        super(message)
+        this.name = 'DubniumTemplateError'
+    }
+}
+
 const Template = class {
     template = {}
-    #type = 0
     constructor(template){
         this.template = template
-        this.#type = typeof template == 'string' ? 1 : 0
+        if(!typeof template == 'string' && !typeof template == 'object') throw new DubniumTemplateError(`Invalid template type`)
     }
 
     /** Use the template */
     use(...values){
-    if (this.#type == 0){
+    if (typeof template == 'string'){
         let r = this.template
         values.forEach((val, index) => {
         r = r.split(`{${index}}`).join(val)
         })
         return r
-    }else{
+    }else if(typeof template == 'object'){
         let n = 0
         const r = this.template
         values.forEach(val => {
             if (n > r.length) return
             let key = Object.keys(this.template)[n]
             if (typeof val != typeof r[key]) console.warn(`Changed type of ${Object.keys(this.template)[n]} to ${typeof val}`)
+            if(r[key] == 'required' && !val) throw new DubniumTemplateError(`Missing required value ${key}`)
             r[key] = val
             n++
         })
         return r
+    }else{
+        throw new DubniumTemplateError(`Invalid template type. Must be string or object`)
     }
 }
 }
@@ -849,4 +905,7 @@ module.exports = Dubnium
 module.exports.Dubnium = Dubnium
 module.exports.Template = Template
 module.exports.extensionPermissions = extensionPermissions
+module.exports.DubniumError = DubniumError
+module.exports.DubniumTemplateError = DubniumTemplateError
+module.exports.Helpers = require('./functions')
 module.exports.Record = Record
