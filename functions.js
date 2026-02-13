@@ -1,59 +1,75 @@
-const { readdirSync, statSync, realpathSync } = require("fs")
-const path = require("path")
+const { readdir, stat, realpath, access, constants } = require("fs/promises");
+const path = require("path");
+const os = require("os");
 
 /**
-* Iterate through a directory and execute a callback function on each file
-* @param {*} dir Directory to walk
-* @param {*} callback Callback function
-* @returns {void}
-*/
-const walkDir = (dir, callback) => {
-   return readdirSync(dir).forEach(f => {
-       statSync(path.join(dir, f)).isDirectory() ? walkDir(path.join(dir, f), callback) : callback(path.join(dir, f))
-   })
-}
+ * Recursively iterate through a directory and execute an async callback on each file
+ * @param {string} dir Directory to walk
+ * @param {Function} callback Async callback function
+ */
+const walkDir = async (dir, callback) => {
+    const files = await readdir(dir);
+    
+    await Promise.all(files.map(async (f) => {
+        const fullPath = path.join(dir, f);
+        const stats = await stat(fullPath);
+        
+        if (stats.isDirectory()) {
+            await walkDir(fullPath, callback);
+        } else {
+            await callback(fullPath);
+        }
+    }));
+};
 
 module.exports = {
-
     /**
-     * Convert any data type to string
-     * @param {*} data Data to convert to string
-     * @returns {string} Stringified data
+     * Convert any data type to string safely
+     * @param {*} data Data to convert
+     * @returns {string}
      */
     stringify(data) {
-        if (typeof data == "string") return data
-        else if (typeof data == "object") return JSON.stringify(data)
-        else {
-            return String(data)
-        }
+        if (typeof data === "string") return data;
+        if (typeof data === "object" && data !== null) return JSON.stringify(data);
+        return String(data);
     },
 
-    walkDir,
-
-  /**
-   * Search an array for a value
-   * @param {*} arr Array to search
-   * @param {*} val Value to search for
-   * @returns {Array} Array of matches
-   */
-    searchArray(arr = [], val = "") {
-        return arr.filter(el => {
-            return el.match(new RegExp(val, 'gi'))
-        })
+   async walkDir(dir, callback) {
+    const files = await readdir(dir);
+    
+    await Promise.all(files.map(async (f) => {
+        const fullPath = path.join(dir, f);
+        const stats = await stat(fullPath);
+        
+        if (stats.isDirectory()) {
+            await walkDir(fullPath, callback);
+        } else {
+            await callback(fullPath);
+        }
+    }));
     },
 
     /**
-     * Get full path of a file
-     * @param {*} file_path File path to get full path of
-     * @returns {string} Full path
+     * Get full path of a file asynchronously
+     * @param {string} filePath 
+     * @returns {Promise<string>}
      */
-    fullPath(file_path) {
-        return realpathSync((file_path ? file_path : "~").replace("~", require("os").homedir()))
-    }
-}
+    async fullPath(filePath) {
+        const target = (filePath || "~").replace("~", os.homedir());
+        return await realpath(target);
+    },
 
-    fullPath(file_path) {
-        return realpathSync((file_path ? file_path : "~").replace("~", require("os").homedir()))
+    /**
+     * Check if a file exists without throwing errors
+     * @param {string} filePath 
+     * @returns {Promise<boolean>}
+     */
+    async exists(filePath) {
+        try {
+            await access(filePath, constants.F_OK);
+            return true;
+        } catch {
+            return false;
+        }
     }
-
-}
+};

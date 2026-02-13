@@ -22,23 +22,28 @@ const db = new Dubnium('dir','file extension')
 ### Create Record
 
 ```js 
-db.create('tag',data)
+await db.create('tag',data)
+```
+
+### Read Record
+```js
+await db.read('tag')
 ```
 
 ### Delete Record
 
 ```js
-db.get('tag').delete()
+await db.get('tag').delete()
 ```
 
 ### Modify
 
 ```js
 // Modify Record's data:
-db.get('tag').edit(data)
+await db.get('tag').write(data)
 
 // Modify Record's tag:
-db.get('old_tag').setTag('new_tag')
+await db.get('old_tag').setTag('new_tag')
 ```
 
 ### More API methods can be found on our [docs](https://db.coolstone.dev)

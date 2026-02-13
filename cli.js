@@ -1,31 +1,69 @@
 #! /usr/bin/env node
-const { existsSync, readFileSync } = require("fs")
-if(!process.argv[2]) {return console.log("\nPlease add command.\n\nCommand syntax: \x1b[47m\x1b[30m[npx] dubnium <command>\n") }
-const cmd = process.argv[2].toLowerCase()
-if(cmd == 'docs' || cmd == 'help' || cmd == 'support') return console.log("Get help on our docs, https://db.coolstone.dev")
-const rl = require("readline").createInterface({ input:process.stdin, output:process.stdout })
-/** Syntax: [npx] dubnium command */
-const q = () => {
-rl.question('Dir path: ', dirpath => {
-if(!dirpath){ rl.close(); console.log("\nPlease specify a path.\n\nCommand syntax: \x1b[47m\x1b[30m[npx] dubnium <command>\n"); return q()}
-if(!existsSync(dirpath)) {console.error("Path not found."); rl.close(); return q()}
-if(!existsSync(`${dirpath}/dubniumconfig.json`)) rl.question("File extension: ", ext => { new (require("./index"))(dirpath,ext).saveConfig() })
-rl.question("Args (separate with ','): ", args => { 
-const { ext } = JSON.parse(readFileSync(`${dirpath}/dubniumconfig.json`))
-const db = new (require("./index"))(dirpath,ext)
-let a = args.trim().split(" ").join("").split(",")
-if(db[cmd] && typeof db[cmd] == 'function'){
-console.log(`Ran ${cmd} \n\n`, db[cmd].apply(db,a))
-}else if(db.get(a[0])[cmd] && typeof db.get(a[0])[cmd] == 'function'){
-const r = db.get(a[0])
-a.splice(0,1)
-console.log(`Ran ${cmd} \n\n`, r[cmd].apply(db,a))
-}else{
-console.log("\nCommand not found.\n\nCommand syntax: \x1b[47m\x1b[30m[npx] dubnium <command>\n")
+const path = require('path');
+const { readFile } = require('fs/promises');
+const functions = require('./functions');
+const Dubnium = require('./index');
+
+const rl = require("readline").createInterface({ 
+    input: process.stdin, 
+    output: process.stdout 
+});
+
+const question = (str) => new Promise(resolve => rl.question(str, resolve));
+
+async function runCLI() {
+    const cmd = process.argv[2]?.toLowerCase();
+
+    if (!cmd) {
+        console.log("\nUsage: dubnium <command>");
+        process.exit(0);
+    }
+
+    if (['docs', 'help', 'support'].includes(cmd)) {
+        console.log("Get help: https://db.coolstone.dev");
+        process.exit(0);
+    }
+
+    try {
+        const dirpath = await question('Dir path: ');
+        if (!dirpath || !(await functions.exists(dirpath))) {
+            console.error("Invalid path.");
+            return runCLI();
+        }
+
+        let config = { ext: 'json' };
+        const configPath = path.join(dirpath, '.dubnium', 'config.json');
+        
+        if (await functions.exists(configPath)) {
+            config = JSON.parse(await readFile(configPath, 'utf-8'));
+        } else {
+            const ext = await question('File extension (json/txt): ');
+            config.ext = ext || 'json';
+        }
+
+        const db = new Dubnium(dirpath, config);
+        const rawArgs = await question("Args (separate with ','): ");
+        const args = rawArgs.split(',').map(a => a.trim());
+
+        if (typeof db[cmd] === 'function') {
+            const result = await db[cmd](...args);
+            console.log(`\nResult:\n`, result);
+        } else {
+            const record = db.get(args[0]);
+            const recordArgs = args.slice(1);
+            
+            if (typeof record[cmd] === 'function') {
+                const result = await record[cmd](...recordArgs);
+                console.log(`\nResult:\n`, result);
+            } else {
+                console.log("\nCommand not found.");
+            }
+        }
+    } catch (err) {
+        console.error(`\nError: ${err.message}`);
+    } finally {
+        rl.close();
+    }
 }
-rl.close()
-})
-})
-}
-module.exports = q
-q()
+
+runCLI();

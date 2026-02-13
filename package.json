@@ -1,7 +1,13 @@
 {
   "name": "dubnium",
-  "version": "3.0.2",
-  "repository": "https://github.com/coolstone-tech/dubnium",
+  "version": "4.0.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coolstone-tech/dubnium.git"
+  },
+  "engines": {
+  "node": ">=14.0.0"
+},
   "funding": "https://www.patreon.com/coolstone",
   "homepage": "https://db.coolstone.dev",
   "description": "A powerful local database",
@@ -19,9 +25,11 @@
     "elementscript",
     "middleware"
   ],
-  "author": "CoolStone Technologies",
   "license": "MIT",
   "bin": {
     "dubnium": "cli.js"
+  },
+  "dependencies": {
+    "proper-lockfile": "^4.1.2"
   }
 }
