@@ -5,7 +5,8 @@ const {
     stat,
     mkdir,
     rmdir,
-    unlink
+    unlink,
+    rm
 } = require('fs/promises')
 
 const Record = require('./record')
@@ -40,7 +41,15 @@ const _config = {
     ],
     trash: "",
     name: "dubnium",
+    metadata:true
     }
+
+const d = new Date().toISOString()
+const metadataDefaults = {
+    createdAt: d,
+    updatedAt: d,
+    ttl: 0,
+}
 
 module.exports._config = _config
 
@@ -52,12 +61,15 @@ module.exports = class Dubnium extends require('events') {
 
     name = ""
 
+    index = {}
+
     constructor(dir ="", conf = _config) {
         super()
         mkdirSync(dir || this.config.dir, { recursive: true })
         this.config.dir = realpathSync(dir || this.config.dir) // Use sync once during initialization to ensure the directory is set before any async operations
         this.config = { ...this.config, ...conf }
         if(this.config.trash) mkdirSync(this.config.trash, { recursive: true })
+        if(this.config.versioning.enabled) mkdirSync(`${this.config.dir}/.versions`, { recursive: true })
         this.name = this.config.name ? this.config.name : path.basename(this.config.dir)
                 conf.requireRoot?.forEach(method => {
                     if (!this[method]) throw new DubniumError(`Method "${method}" does not exist`)
@@ -85,6 +97,48 @@ module.exports = class Dubnium extends require('events') {
     return resolved;
 }
 
+/**
+ * Get metadata for a record by tag, including methods to read, write, and delete the metadata
+ * @param {string} tag The tag of the record to get metadata for
+ * @returns 
+ */
+metadata(tag) {
+    if(!this.config.metadata) return {
+        async read() { return metadataDefaults },
+        async write() { return null },
+        async delete() { return null },
+        filePath: null
+    }
+    const filePath = this.#resolvePath(path.join('.metadata', tag))
+    return {
+        filePath,
+        /**
+         * Read metadata for a record. If the metadata file does not exist, it will return default metadata values. If the metadata file exists but is invalid JSON, it will also return default metadata values.
+         */
+        async read() {
+            if (!await functions.exists(filePath)) return metadataDefaults
+            const data = await readFile(filePath, 'utf-8')
+            return { ...metadataDefaults, ...JSON.parse(data) }
+        },
+        /**
+         * Write metadata for a record, overwriting existing metadata. If `meta` is not an object, it will be stored under a `data` property in the metadata JSON.
+         * @param {*} meta The metadata to write. If not an object, it will be stored as `{ data: meta }` in the metadata JSON.
+         */
+        async write(meta=metadataDefaults) {
+            const existing = await this.read() || {}
+            const updated = { ...existing, ...meta }
+            if(!(await functions.exists(path.dirname(filePath)))) await mkdir(path.dirname(filePath), { recursive: true })
+            await writeFile(filePath, JSON.stringify(updated), 'utf-8')
+        },
+        /**
+         * Delete the metadata file for a record. This does not delete the record itself, only its associated metadata file. If the metadata file does not exist, this method does nothing.
+         */
+        async delete() {
+            if (await functions.exists(filePath)) await unlink(filePath)
+        }
+    }
+}
+
     /**
      * Safely write data to a file with locking to prevent concurrent writes
      * @param {string} tag The tag of the record to write to
@@ -95,7 +149,7 @@ module.exports = class Dubnium extends require('events') {
         if (!(await functions.exists(filePath))) {
             await writeFile(filePath, '', 'utf-8'   ) 
         }
-
+        
         let release
         try {
             release = await lockfile.lock(filePath, { retries: { retries: 5, maxTimeout: 1000 } })
@@ -159,7 +213,6 @@ async safeUnlink(tag) {
         if (release) await release()
     }
 }
-
     /**
      * Return the file path for a given record tag
      * @param {string} tag The tag of the record to locate
@@ -182,40 +235,44 @@ locate(tag) {
     /**
      * Read a record by tag
      * @param {string} tag Tag of the record to read
-     * @param {boolean} parseJSON Whether to parse the record as JSON (default: false)
      * @returns {Promise<string|object>} The record data, either as a string or parsed JSON object
      */
-    async read(tag, parseJSON = false) {
-        if (!tag) throw new DubniumError(`Tag is required`)
-        const filePath = this.#resolvePath(tag);
-    
-    if (!(await functions.exists(filePath))) {
-        throw new DubniumError(`Record at "${filePath}" does not exist`);
-    }
-    
-        const data = await readFile(filePath, 'utf-8')
-        return parseJSON ? JSON.parse(data) : data
+    async read(tag) {
+        return await this.get(tag).read()
     }
 
-    async write(tag, data) {
-        if (!tag) throw new DubniumError(`Tag is required`)
-        if (data === undefined) throw new DubniumError(`Data is required`)
-        const filePath = this.#resolvePath(tag);
-        await this.safeWrite(filePath, typeof data === 'string' ? data : JSON.stringify(data))
-    }
+    /**
+     * Write data to a record by tag, creating the record if it doesn't exist
+     * @param {string} tag Tag of the record to write to
+     * @param {*} data Data to write to the record (will be stringified if not a string)
+     * @returns {Promise<Dubnium>} The Dubnium instance
+     */
+async write(tag, data){
+await this.get(tag).write(data)
+return this
+}
 
     /** Create a record with a tag and data
      * @param {string} tag Tag of the record to create
      * @param {*} data Data to store in the record (will be stringified if not a string)
+     * @param {number} [ttl] Optional time-to-live for the record in milliseconds
      * @returns {Promise<Dubnium>} The Dubnium instance 
      */
-     async create(tag="", data) {
+     async create(tag="", data, ttl=0) {
         if (!tag) throw new DubniumError(`Tag is required`)
         if (data === undefined) throw new DubniumError(`Data is required`)
         if (typeof data == "object") data = JSON.stringify(data)
-        await this.safeWrite(this.#resolvePath(tag), data, { flag: this.config.force ? 'w' : 'wx' })
-        this.emit('create', tag, data)
-        return this
+        const timestamp = new Date().toISOString()
+        await this.safeWrite(this.locate(tag), data, { flag: this.config.force ? 'w' : 'wx' })
+        if(this.config.metadata) await this.metadata(tag).write({ createdAt: timestamp, ttl })
+        if(this.config.versioning.enabled) {
+        const versionsDir = path.join(this.config.dir, '.versions', tag)
+        if(!await functions.exists(versionsDir)) await mkdir(versionsDir, { recursive: true })
+        await this.safeWrite(`${versionsDir}/${timestamp}.${this.config.ext}`, data)
+    }
+    if(this.index.length) this.index[tag] = data
+    this.emit('create', tag, data)
+    return this
     }
 
     /**
@@ -227,7 +284,6 @@ locate(tag) {
         return new Record(this.locate(tag), this)
     }
 
-
     /**
      * Get all records, with optional filtering and limiting
      * @param {Object} options Options for filtering and limiting records
@@ -237,6 +293,14 @@ locate(tag) {
      * @returns {Promise<Array>} An array of Record instances or tags, depending on `tagOnly`
      */
     async getAll({ tagOnly = false, limit = 0, filter = () => true }){
+        if(Object.keys(this.index).length > 0) {
+            const tags = Object.keys(this.index).filter(tag => filter(tag)).slice(0, limit > 0 ? limit : undefined)
+            return tagOnly ? tags : tags.map(tag => new Record(this.locate(tag), this))
+        }
+        if((await functions.exists(path.join(this.config.dir, '.index')))) {
+            const indexData = JSON.parse(await readFile(path.join(this.config.dir, '.index'), 'utf-8'))
+            return Object.keys(indexData).filter(tag => filter(tag)).slice(0, limit > 0 ? limit : undefined).map(tag => tagOnly ? tag : new Record(this.locate(tag), this))
+        }
         let files = await readdir(this.config.dir)
         if (typeof filter === 'function') files = files.filter(f => f.endsWith(`.${this.config.ext}`) && f != `.${this.config.ext}`).filter(filter)
         if (limit > 0) files = files.slice(0, limit)
@@ -250,10 +314,11 @@ locate(tag) {
      * @param {Object} options Options for filtering and limiting records
      * @param {boolean} options.tagOnly Whether to return only tags (default: false)
      * @param {number} options.limit Maximum number of records to return (default: 0, meaning no limit)
+     * @deprecated Use getAll with a custom filter function instead for more flexible searching. Example: `db.getAll({ filter: async f => (await f.read(true)).includes(value) })`
      * @returns {Promise<Array>} An array of Record instances or tags, depending on `tagOnly`
      */
     async getFromValue(value="", { tagOnly = false, limit = 0 }){
-        return this.getAll({ tagOnly, filter: async f => {
+        return this.getAll({ tagOnly:false, filter: async f => {
             const filePath = this.locate(f.split('.').slice(0, -1).join('.'))
             if (!await functions.exists(filePath)) return false
             const data = await readFile(filePath, 'utf-8')
@@ -273,12 +338,12 @@ locate(tag) {
 
     /**
      * Create an alias for an existing method
-     * @param {*} alais Name of the new alias method
+     * @param {*} alias Name of the new alias method
      * @param {*} existing_func Name of the existing method to alias
      * @returns {Dubnium} The Dubnium instance 
      */
-    alias(alais, existing_func) {
-    this[alais] = this[existing_func]
+    alias(alias, existing_func) {
+    this[alias] = this[existing_func]
     return this
 }
 
@@ -336,13 +401,15 @@ locate(tag) {
         const totalLimit = Object.values(timeLimits).reduce((a, b) => a + b, 0)
         const records = await this.getAll({ tagOnly: false })
         const now = Date.now()
+        let count = 0
         for (const record of records) {
             const stats = await stat(record.path)
             if (now - stats.mtimeMs > totalLimit) {
                 await record.delete()
+                count += 1
             }
         }
-        this.emit('deleteOld', timeLimits)
+        this.emit('deleteOld', timeLimits, count)
         return this
     }
 
@@ -352,13 +419,15 @@ locate(tag) {
      */
     async deleteLarge(size){
         const records = await this.getAll({ tagOnly: false })
+        let count = 0
         for (const record of records) {
             const stats = await stat(record.path)
             if (stats.size > size) {
                 await record.delete()
+                count += 1
             }
         }
-        this.emit('deleteLarge', size)
+        this.emit('deleteLarge', size, count)
         return this
     }
 
@@ -369,16 +438,38 @@ locate(tag) {
     async emptyTrash(){
         if (!this.config.trash) throw new DubniumError(`Trash directory is not configured`)
         const trashFiles = await readdir(this.config.trash)
+        let count = 0
         for (const file of trashFiles) {
             await functions.safeUnlink(path.join(this.config.trash, file))
+            count += 1
         }
+        this.emit('emptyTrash', count)
         return this
     }
 
+    /**
+     * Permanently delete a record from the trash directory by tag
+     * @param {string} tag The tag of the record to delete from trash
+     * @returns {Promise<Dubnium>} The Dubnium instance
+     */
     async deleteFromTrash(tag) {
         if (!this.config.trash) throw new DubniumError(`Trash directory is not configured`)
         const trashFile = path.join(this.config.trash, `${tag}.${this.config.ext}`)
         if (!await functions.exists(trashFile)) throw new DubniumError(`Record with tag "${tag}" does not exist in trash`)
+        await functions.safeUnlink(trashFile)
+        return this
+    }
+
+    /**
+     * Restore a record from the trash directory by tag
+     * @param {string} tag The tag of the record to restore from trash
+     * @returns {Promise<Dubnium>} The Dubnium instance
+     */
+    async restoreFromTrash(tag) {
+        if (!this.config.trash) throw new DubniumError(`Trash directory is not configured`)
+        const trashFile = path.join(this.config.trash, `${tag}.${this.config.ext}`)
+        if (!await functions.exists(trashFile)) throw new DubniumError(`Record with tag "${tag}" does not exist in trash`)
+        await this.safeWrite(this.locate(tag), await readFile(trashFile, 'utf-8'))
         await functions.safeUnlink(trashFile)
         return this
     }
@@ -389,5 +480,53 @@ locate(tag) {
             yield record 
         }
     }
+
+    /**
+     * Monitor records for expiration based on their TTL (time-to-live) metadata and automatically delete expired records at regular intervals
+     * @param {Number} interval The interval in milliseconds at which to check for expired records (default: 60000 ms or 1 minute)
+     */
+    monitorTTL(interval = 60000) {
+    this.ttlInterval = setInterval(async () => {
+        for await (const record of this) {
+           const meta = await this.metadata(record.tag).read()
+              if(meta.ttl && meta.createdAt){
+        const age = Date.now() - new Date(meta.createdAt).getTime()
+        if(age > meta.ttl) {
+            await record.delete()
+            this.emit('expire', record.tag)
+        }
+    }
+        }
+    }, interval)
+}
+
+/**
+ * Build an in-memory index of all records for faster access, with an option to include only tags or full record data. This method reads all records and stores their data in the `index` property of the Dubnium instance, keyed by record tag.
+ * @param {number} limit Optional limit on the number of records to index (default: 0, meaning no limit)
+ * @returns {Promise<Dubnium>} The Dubnium instance
+ */
+async buildIndex(limit = 0) {
+    const records = await this.getAll({ tagOnly:true })
+    records.slice(0, limit > 0 ? limit : undefined).forEach(async tag => {
+       const record = this.get(tag)
+        const data = await record.read(true)
+       this.index[record.tag] = data
+    })
+    return this
+}
+
+/**
+ * Build a persistent index of all records by reading from a cached index file if it exists, or building a new index and saving it to the cache file if it doesn't. This method checks for the existence of an index file in the database directory (named `.index`), and if it exists, reads and parses the JSON data to populate the `index` property. If the index file does not exist, it calls `buildIndex()` to create the index from scratch, then saves the index to the `.index` file for future use. This allows for faster access to record data on subsequent runs by avoiding the need to read each record file individually.
+ * @returns {Promise<Dubnium>} The Dubnium instance
+ */
+async buildPersistentIndex() {
+   for await (const record of this) {
+        const data = await record.read()
+         this.index[record.tag] = data
+    }
+    this.safeWrite('.index', JSON.stringify(this.index))
+    this.index = {}
+    return this
+}
 
 }

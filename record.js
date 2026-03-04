@@ -1,4 +1,3 @@
-
 const {
     rm,
     readFile,
@@ -40,6 +39,18 @@ path = ''
  * @returns {Promise<*>} The record data
  */
 async read(stringify = false) {
+
+    const meta = await this.#dubniumInstance.metadata(this.tag).read()
+
+    if(meta.ttl && meta.createdAt){ 
+        const age = Date.now() - new Date(meta.createdAt).getTime()
+        if(age > meta.ttl) {
+            await this.delete(this.tag)
+            return null
+        }
+    }
+    
+
     const data = await readFile(this.path, 'utf-8')
     
     if (this.#dubniumInstance.config.ext === 'json') {
@@ -83,9 +94,14 @@ if (this.#dubniumInstance.config.ext === 'json') {
             await rm(`${versionsDir}/${oldestFile}`)
         }
 
+        if(this.#dubniumInstance.config.metadata) await this.#dubniumInstance.metadata(this.tag).write({ updatedAt: new Date() })
+
         await this.#dubniumInstance.safeWrite(`${versionsDir}/${timestamp}.${this.#dubniumInstance.config.ext}`, payload)
     }
     this.#dubniumInstance.emit('edit', this.tag, data)
+
+    if(this.#dubniumInstance.index.length) this.#dubniumInstance.index[this.tag] = data
+
     return this
 }
 
@@ -100,6 +116,9 @@ async delete() {
     } else {
         await this.#dubniumInstance.safeUnlink(this.path)
     }
+    
+    if(this.#dubniumInstance.config.metadata) await this.#dubniumInstance.metadata(this.tag).delete()
+
     this.#dubniumInstance.emit('delete', this.tag)
     return this.#dubniumInstance
 }
@@ -258,12 +277,12 @@ exit(){
 
 /**
  * Create an alias for a Record method
- * @param {string} alais The name of the alias
+ * @param {string} alias The name of the alias
  * @param {string} existing_func The name of the existing method to alias
  * @returns {Record} The Record instance
  */
-alias(alais, existing_func) {
-    this[alais] = this[existing_func]
+alias(alias, existing_func) {
+    this[alias] = this[existing_func]
     return this
 }
 
@@ -286,6 +305,43 @@ const versionPath = `${this.#dubniumInstance.config.dir}/.versions/${this.tag}/$
 if(!await exists(versionPath)) throw new Error('Version not found')
 const data = await readFile(versionPath, 'utf-8')
 return this.#dubniumInstance.config.ext == 'json' ? JSON.parse(data) : data
+}
+
+/**
+ * Manually save a snapshot of the current record data as a new version, regardless of the versioning limit or settings. This allows you to create a version at any point in time, even if automatic versioning is disabled or the limit has been reached.
+ * @returns {Promise<{record: Record, timestamp: string}>} An object containing the Record instance and the timestamp of the saved version
+ */
+async saveSnapshot(){
+if(!this.#dubniumInstance.config.versioning.enabled) throw new Error('Versioning is not enabled in the configuration')
+const versionsDir = `${this.#dubniumInstance.config.dir}/.versions/${this.tag}`
+if(!await exists(versionsDir)) await mkdir(versionsDir, { recursive: true })
+const timestamp = new Date().toISOString()
+
+const data = await this.read(true)
+await this.#dubniumInstance.safeWrite(`${versionsDir}/${timestamp}.${this.#dubniumInstance.config.ext}`, this.#dubniumInstance.config.ext === 'json' ? JSON.stringify(data) : String(data))
+return {
+    record: this,
+    timestamp
+}
+
+}
+
+/**
+ * Asynchronously iterate over all versions of the record, yielding an object containing the timestamp and data for each version. This allows you to easily access and process all versions of a record in a memory-efficient way.
+ * @returns {AsyncGenerator<{timestamp: string, data: *}>} An async generator yielding objects with `timestamp` and `data` properties for each version of the record
+ */
+async *versions(){
+    const versionsDir = `${this.#dubniumInstance.config.dir}/.versions/${this.tag}`
+    if(!await exists(versionsDir)) return
+    const versionFiles = await readdir(versionsDir)
+    for(const file of versionFiles) {
+        const timestamp = PATH.parse(file).name
+        const data = await readFile(`${versionsDir}/${file}`, 'utf-8')
+        yield {
+            timestamp,
+            data: this.#dubniumInstance.config.ext === 'json' ? JSON.parse(data) : data
+        }
+    }
 }
 
 }
